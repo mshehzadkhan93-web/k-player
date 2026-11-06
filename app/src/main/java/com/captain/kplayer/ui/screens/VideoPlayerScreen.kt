@@ -282,9 +282,9 @@ fun VideoPlayerScreen(
                             CaptionStyleCompat(
                                 subtitleColorValue(subtitleColor),
                                 subtitleBackgroundValue(subtitleBackground),
-                                Color.TRANSPARENT,
+                                android.graphics.Color.TRANSPARENT,
                                 CaptionStyleCompat.EDGE_TYPE_NONE,
-                                Color.BLACK,
+                                android.graphics.Color.BLACK,
                                 subtitleTypeface(subtitleFont)
                             )
                         )
