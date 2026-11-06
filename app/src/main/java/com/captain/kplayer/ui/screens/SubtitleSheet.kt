@@ -1,6 +1,8 @@
 package com.captain.kplayer.ui.screens
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
@@ -86,7 +89,7 @@ fun SubtitleSheet(
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = "No embedded subtitles in this video",
+                    text = "No embedded subtitles in this video — load one from a file",
                     color = TextSecondary,
                     fontSize = 14.sp
                 )
@@ -116,6 +119,8 @@ fun SubtitleSheet(
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
                 )
+                EmbeddedTag()
+                Spacer(modifier = Modifier.width(8.dp))
                 if (track.selected && !subtitlesDisabled) {
                     Icon(
                         imageVector = Icons.Rounded.Check,
@@ -289,6 +294,27 @@ fun SubtitleSheet(
 @Composable
 fun SheetCycleButton(value: String, onClick: () -> Unit) {
     GlassButton(onClick = onClick, text = value)
+}
+
+/** Small pill marking a track as embedded in the video file. */
+@Composable
+private fun EmbeddedTag() {
+    Box(
+        modifier = Modifier
+            .border(
+                width = 1.dp,
+                color = LocalAccent.current.start.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(10.dp)
+            )
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    ) {
+        Text(
+            text = "Embedded",
+            color = LocalAccent.current.start,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
 }
 
 val SUBTITLE_COLORS = listOf("White", "Yellow", "Cyan", "Green", "Pink")

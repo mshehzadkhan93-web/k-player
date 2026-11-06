@@ -9,6 +9,7 @@ import com.captain.kplayer.data.SampleData
 import com.captain.kplayer.data.StreamItem
 import com.captain.kplayer.data.TrackItem
 import com.captain.kplayer.data.VideoItem
+import com.captain.kplayer.ui.components.HomeTab
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -89,6 +90,22 @@ class LibraryViewModel : ViewModel() {
     }
 
     val streams: StateFlow<List<StreamItem>> = _streams
+
+    /**
+     * Task C: the selected home tab lives here, not in a composable's
+     * remember — HOME leaves composition on every forward navigation
+     * (player, folder, music player, Settings), which wiped a remembered
+     * tab and always dropped the user back on Videos. Kept in the
+     * ViewModel, Back returns to the tab the user was on (Folders after a
+     * folder, Music after the music player, Network after a stream,
+     * whatever tab Settings was opened from).
+     */
+    private val _selectedTab = MutableStateFlow(HomeTab.VIDEOS)
+    val selectedTab: StateFlow<HomeTab> = _selectedTab
+
+    fun selectTab(tab: HomeTab) {
+        _selectedTab.value = tab
+    }
 
     val searchQuery = MutableStateFlow("")
     val sortMode = MutableStateFlow(VideoSort.NAME)

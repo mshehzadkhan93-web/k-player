@@ -7,6 +7,7 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.util.Rational
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -23,8 +24,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -45,6 +46,7 @@ import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.BrightnessHigh
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.FileUpload
+import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.MoreVert
@@ -52,6 +54,7 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistPlay
+import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
@@ -61,7 +64,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -76,11 +78,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.changedToUpOrCanceled
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -92,6 +102,7 @@ import androidx.navigation.NavHostController
 import com.captain.kplayer.data.formatDuration
 import com.captain.kplayer.ui.components.AccentGradientButton
 import com.captain.kplayer.ui.components.GlassButton
+import com.captain.kplayer.ui.components.GlassCard
 import com.captain.kplayer.ui.components.GlassDialog
 import com.captain.kplayer.ui.theme.LocalAccent
 import com.captain.kplayer.ui.theme.TextPrimary
@@ -100,6 +111,7 @@ import com.captain.kplayer.viewmodel.PlayerViewModel
 import com.captain.kplayer.viewmodel.SettingsViewModel
 import com.captain.kplayer.viewmodel.VideoAspect
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
 /** Gesture overlay kinds shown while the user drags or double-taps. */
@@ -112,11 +124,14 @@ private sealed interface GestureOverlay {
 }
 
 /**
- * Fullscreen video player: tap to toggle glass controls, double-tap to seek
- * by the configured step, long-press for 2x speed, drag gestures for
- * brightness / volume / seek, speed and aspect controls, screen lock,
- * background play, picture-in-picture, audio/subtitle sheets, equalizer,
- * playlist and video info.
+ * Fullscreen video player: one glass top bar, one uniform row of five
+ * circular glass transport buttons, one glass bottom panel (seek + transport
+ * pills + utility pills), and a single pointer-input gesture block for the
+ * video area (tap to toggle controls, double-tap to seek by the configured
+ * step, long-press for 2x speed, drag for brightness / volume / seek).
+ * Speed and aspect controls, screen lock, background play,
+ * picture-in-picture, audio/subtitle sheets, equalizer, playlist and video
+ * info are all wired as before.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -132,8 +147,6 @@ fun VideoPlayerScreen(
     val configuration = LocalConfiguration.current
 
     val entry by playerVm.currentEntry.collectAsState()
-    val currentIndex by playerVm.currentIndex.collectAsState()
-    val queue by playerVm.queue.collectAsState()
     val isPlaying by playerVm.isPlaying.collectAsState()
     val isBuffering by playerVm.isBuffering.collectAsState()
     val playerError by playerVm.playerError.collectAsState()
@@ -283,6 +296,28 @@ fun VideoPlayerScreen(
         }
     }
 
+    /**
+     * The live brightness at this moment: the window value when the app has
+     * set one, otherwise the system brightness setting, otherwise the
+     * ViewModel value. The window reports -1f while it still follows the
+     * system default, so that case must fall through to the system setting
+     * instead of being treated as a real brightness.
+     */
+    fun liveBrightness(): Float {
+        val windowValue = activity?.window?.attributes?.screenBrightness ?: -1f
+        if (windowValue >= 0f) return windowValue
+        val systemValue = try {
+            Settings.System.getInt(
+                context.contentResolver,
+                Settings.System.SCREEN_BRIGHTNESS,
+                -1
+            ) / 255f
+        } catch (_: Exception) {
+            -1f
+        }
+        return if (systemValue >= 0f) systemValue else playerVm.brightnessPercent.value
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -341,116 +376,169 @@ fun VideoPlayerScreen(
             }
         }
 
-        // Gesture layer: tap / double-tap / long-press / drag.
+        // Gesture layer: ONE pointer-input block owns tap, double-tap,
+        // long-press and drag, so the detectors can no longer fight each
+        // other (or leave a drag half-consumed by a tap detector).
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val widthPx = constraints.maxWidth.toFloat()
             val heightPx = constraints.maxHeight.toFloat()
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(locked, doubleTapStep, gestureBrightness, gestureVolume, gestureSeek, gestureSensitivity) {
-                        detectTapGestures(
-                            onTap = {
-                                if (!locked) controlsVisible = !controlsVisible
-                            },
-                            onDoubleTap = { offset ->
-                                if (locked) return@detectTapGestures
-                                val stepMs = doubleTapStep * 1000L
-                                if (offset.x < widthPx / 2f) {
-                                    playerVm.seekRelative(-stepMs)
-                                    overlay = GestureOverlay.DoubleTap("-${doubleTapStep}s")
+                    .pointerInput(
+                        locked, doubleTapStep, gestureBrightness, gestureVolume,
+                        gestureSeek, gestureSensitivity, widthPx, heightPx
+                    ) {
+                        val touchSlop = viewConfiguration.touchSlop
+                        val longPressTimeoutMs = viewConfiguration.longPressTimeoutMillis
+                        var lastTapUpMs = 0L
+                        var lastTapX = 0f
+                        awaitEachGesture {
+                            val down = awaitFirstDown()
+                            val downPos = down.position
+                            val downMs = System.currentTimeMillis()
+                            // Baselines are re-synced from LIVE system state
+                            // at the start of every gesture — never from a
+                            // cached value. That is what used to reset the
+                            // volume to 0 after the hardware volume buttons
+                            // had been used, and what left the brightness
+                            // swipe starting from a stale value.
+                            playerVm.refreshVolume()
+                            val startVolume = playerVm.volumePercent.value
+                            val startBrightness = liveBrightness()
+                            val startPosition = playerVm.positionMs.value
+                            val isSecondTap = downMs - lastTapUpMs < 300L &&
+                                abs(downPos.x - lastTapX) < touchSlop * 4
+                            var totalDrag = Offset.Zero
+                            var dragKind = 0 // 0 undecided, 1 brightness, 2 volume, 3 seek
+                            var seekPreview = startPosition
+                            var lastLiveSeekMs = 0L
+                            var longPressed = false
+                            var finished = false
+                            while (!finished) {
+                                val remainingLongPress =
+                                    longPressTimeoutMs - (System.currentTimeMillis() - downMs)
+                                val event = if (!longPressed && dragKind == 0 &&
+                                    totalDrag == Offset.Zero && remainingLongPress > 0
+                                ) {
+                                    // Finger still down, no movement yet:
+                                    // wait only until the long-press timeout.
+                                    withTimeoutOrNull(remainingLongPress) {
+                                        awaitPointerEvent()
+                                    }
                                 } else {
-                                    playerVm.seekRelative(stepMs)
-                                    overlay = GestureOverlay.DoubleTap("+${doubleTapStep}s")
+                                    awaitPointerEvent()
                                 }
-                            },
-                            onLongPress = {
-                                if (locked) return@detectTapGestures
-                                playerVm.setSpeedTemporarily(2f)
-                                overlay = GestureOverlay.Speed2x
-                            },
-                            onPress = {
-                                val released = tryAwaitRelease()
-                                if (released && overlay is GestureOverlay.Speed2x) {
-                                    playerVm.restoreSpeed()
-                                    overlay = null
+                                if (event == null) {
+                                    // Held still past the long-press timeout.
+                                    if (!locked) {
+                                        playerVm.setSpeedTemporarily(2f)
+                                        overlay = GestureOverlay.Speed2x
+                                        longPressed = true
+                                    }
+                                    continue
                                 }
-                            }
-                        )
-                    }
-                    .pointerInput(locked, gestureBrightness, gestureVolume, gestureSeek, gestureSensitivity) {
-                        var dragKind = 0 // 0 none, 1 brightness, 2 volume, 3 seek
-                        var startBrightness = 0f
-                        var startVolume = 0
-                        var startPosition = 0L
-                        var seekAccum = 0f
-                        var seekPreview = 0L
-                        var lastLiveSeekMs = 0L
-                        detectDragGestures(
-                            onDragStart = {
-                                dragKind = 0
-                                startBrightness = playerVm.brightnessPercent.value
-                                startVolume = playerVm.volumePercent.value
-                                startPosition = playerVm.positionMs.value
-                                seekAccum = 0f
-                                seekPreview = startPosition
-                            },
-                            onDragEnd = {
-                                if (dragKind == 3) playerVm.seekTo(seekPreview)
-                                overlay = null
-                                dragKind = 0
-                            },
-                            onDragCancel = {
-                                overlay = null
-                                dragKind = 0
-                            },
-                            onDrag = { change, dragAmount ->
-                                if (locked) return@detectDragGestures
-                                if (dragKind == 0) {
-                                    dragKind = if (abs(dragAmount.x) > abs(dragAmount.y)) {
-                                        if (gestureSeek) 3 else 0
-                                    } else if (change.position.x < widthPx / 2f) {
-                                        if (gestureBrightness) 1 else 0
-                                    } else {
-                                        if (gestureVolume) 2 else 0
+                                for (change in event.changes) {
+                                    if (change.id != down.id) continue
+                                    if (change.changedToUpOrCanceled()) {
+                                        finished = true
+                                        break
                                     }
-                                }
-                                when (dragKind) {
-                                    1 -> {
-                                        val delta = -dragAmount.y / heightPx * gestureSensitivity
-                                        val next = (startBrightness + delta)
-                                            .coerceIn(0.05f, 1f)
-                                        playerVm.setBrightnessPercent(next)
-                                        overlay = GestureOverlay.Brightness((next * 100).toInt())
-                                    }
-                                    2 -> {
-                                        val delta = (-dragAmount.y / heightPx * 100f *
-                                            gestureSensitivity).toInt()
-                                        val next = (startVolume + delta).coerceIn(0, 100)
-                                        playerVm.setVolumePercent(next)
-                                        overlay = GestureOverlay.Volume(next)
-                                    }
-                                    3 -> {
-                                        seekAccum += dragAmount.x
-                                        val total = playerVm.durationMs.value
-                                        val deltaMs = (seekAccum / widthPx * total *
-                                            gestureSensitivity).toLong()
-                                        seekPreview = (startPosition + deltaMs)
-                                            .coerceIn(0L, total.coerceAtLeast(0L))
-                                        overlay = GestureOverlay.Seek(seekPreview, total)
-                                        // Bug 6: smooth scrub — the video
-                                        // follows the finger (throttled live
-                                        // seeks); the final position settles
-                                        // on release.
-                                        val now = System.currentTimeMillis()
-                                        if (now - lastLiveSeekMs > 150L) {
-                                            lastLiveSeekMs = now
-                                            playerVm.seekTo(seekPreview)
+                                    val delta = change.positionChange()
+                                    if (delta != Offset.Zero) {
+                                        change.consume()
+                                        totalDrag += delta
+                                        if (dragKind == 0 && !longPressed) {
+                                            if (abs(totalDrag.x) > touchSlop ||
+                                                abs(totalDrag.y) > touchSlop
+                                            ) {
+                                                dragKind = when {
+                                                    abs(totalDrag.x) > abs(totalDrag.y) ->
+                                                        if (gestureSeek) 3 else 0
+                                                    change.position.x < widthPx / 2f ->
+                                                        if (gestureBrightness) 1 else 0
+                                                    else ->
+                                                        if (gestureVolume) 2 else 0
+                                                }
+                                            }
+                                        }
+                                        if (!locked) {
+                                            when (dragKind) {
+                                                1 -> {
+                                                    // Left-half vertical drag.
+                                                    val next = (startBrightness +
+                                                        -totalDrag.y / heightPx *
+                                                        gestureSensitivity)
+                                                        .coerceIn(0.05f, 1f)
+                                                    playerVm.setBrightnessPercent(next)
+                                                    overlay = GestureOverlay.Brightness(
+                                                        (next * 100).toInt()
+                                                    )
+                                                }
+                                                2 -> {
+                                                    // Right-half vertical drag.
+                                                    val next = (startVolume +
+                                                        (-totalDrag.y / heightPx * 100f *
+                                                            gestureSensitivity).toInt())
+                                                        .coerceIn(0, 100)
+                                                    playerVm.setVolumePercent(next)
+                                                    overlay = GestureOverlay.Volume(next)
+                                                }
+                                                3 -> {
+                                                    // Horizontal drag: live
+                                                    // preview + throttled
+                                                    // live seeks, settling
+                                                    // on release.
+                                                    val total = playerVm.durationMs.value
+                                                    seekPreview = (startPosition +
+                                                        (totalDrag.x / widthPx * total *
+                                                            gestureSensitivity).toLong())
+                                                        .coerceIn(0L, total.coerceAtLeast(0L))
+                                                    overlay = GestureOverlay.Seek(
+                                                        seekPreview, total
+                                                    )
+                                                    val now = System.currentTimeMillis()
+                                                    if (now - lastLiveSeekMs > 150L) {
+                                                        lastLiveSeekMs = now
+                                                        playerVm.seekTo(seekPreview)
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
-                        )
+                            // Finger up (or gesture cancelled): settle.
+                            if (longPressed) {
+                                playerVm.restoreSpeed()
+                                overlay = null
+                            } else if (!locked) {
+                                when {
+                                    dragKind == 3 -> {
+                                        playerVm.seekTo(seekPreview)
+                                        overlay = null
+                                    }
+                                    dragKind == 1 || dragKind == 2 -> overlay = null
+                                    isSecondTap -> {
+                                        val stepMs = doubleTapStep * 1000L
+                                        if (downPos.x < widthPx / 2f) {
+                                            playerVm.seekRelative(-stepMs)
+                                            overlay = GestureOverlay.DoubleTap("-${doubleTapStep}s")
+                                        } else {
+                                            playerVm.seekRelative(stepMs)
+                                            overlay = GestureOverlay.DoubleTap("+${doubleTapStep}s")
+                                        }
+                                        lastTapUpMs = System.currentTimeMillis()
+                                        lastTapX = downPos.x
+                                    }
+                                    else -> {
+                                        controlsVisible = !controlsVisible
+                                        lastTapUpMs = System.currentTimeMillis()
+                                        lastTapX = downPos.x
+                                    }
+                                }
+                            }
+                        }
                     }
             )
         }
@@ -531,74 +619,110 @@ fun VideoPlayerScreen(
             }
         }
 
-        // Glass controls.
+        // Glass controls: one top panel, one center transport row, one
+        // bottom panel. Fade in/out over ~300ms; the center row also
+        // scales from 0.92 so it never pops in abruptly.
         AnimatedVisibility(
             visible = controlsVisible && !locked,
-            enter = fadeIn(),
-            exit = fadeOut()
+            enter = fadeIn(animationSpec = tween(300)),
+            exit = fadeOut(animationSpec = tween(300))
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // Top bar.
-                Row(
+                // Top bar: a single glass panel — back, gradient brand,
+                // video title, round glass icon buttons.
+                GlassCard(
+                    radius = 24.dp,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.35f))
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
                 ) {
-                    IconButton(onClick = {
-                        playerVm.onLeavePlayer()
-                        navController.popBackStack()
-                    }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Rounded.ArrowBack, "Back", tint = Color.White)
-                    }
-                    Text(
-                        text = entry?.title ?: "K-Player",
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f)
-                    )
-                    // Queue position, refreshed from the observed entry on
-                    // every track change.
-                    if (queue.size > 1) {
-                        Text(
-                            text = "${currentIndex + 1} / ${queue.size}",
-                            color = Color.White.copy(alpha = 0.8f),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(end = 4.dp)
-                        )
-                    }
-                    IconButton(onClick = { showAudioSheet = true }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Rounded.Audiotrack, "Audio track", tint = Color.White)
-                    }
-                    IconButton(onClick = { showSubtitleSheet = true }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Rounded.Subtitles, "Subtitles", tint = Color.White)
-                    }
-                    IconButton(onClick = { subtitlePicker.launch("*/*") }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Rounded.FileUpload, "Add subtitle file", tint = Color.White)
-                    }
-                    IconButton(onClick = { showEqualizer = true }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Rounded.Equalizer, "Equalizer", tint = Color.White)
-                    }
-                    if (pipEnabled) {
-                        IconButton(onClick = { enterPip() }, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Rounded.PictureInPictureAlt, "Picture-in-picture", tint = Color.White)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        GlassCircleButton(
+                            size = 44.dp,
+                            icon = Icons.Rounded.ArrowBack,
+                            description = "Back",
+                            iconSize = 24.dp
+                        ) {
+                            playerVm.onLeavePlayer()
+                            navController.popBackStack()
                         }
-                    }
-                    IconButton(onClick = { rotate() }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Rounded.ScreenRotation, "Rotate", tint = Color.White)
-                    }
-                    IconButton(onClick = { showVideoInfo = true }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Rounded.MoreVert, "More", tint = Color.White)
+                        Text(
+                            text = "K-Player",
+                            style = TextStyle(
+                                brush = LocalAccent.current.brush,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            ),
+                            modifier = Modifier.padding(start = 10.dp)
+                        )
+                        Text(
+                            text = entry?.title.orEmpty(),
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 10.dp)
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            GlassCircleButton(
+                                size = 40.dp,
+                                icon = Icons.Rounded.Audiotrack,
+                                description = "Audio track",
+                                iconSize = 20.dp
+                            ) { showAudioSheet = true }
+                            GlassCircleButton(
+                                size = 40.dp,
+                                icon = Icons.Rounded.Subtitles,
+                                description = "Subtitles",
+                                iconSize = 20.dp
+                            ) { showSubtitleSheet = true }
+                            GlassCircleButton(
+                                size = 40.dp,
+                                icon = Icons.Rounded.FileUpload,
+                                description = "Add subtitle file",
+                                iconSize = 20.dp
+                            ) { subtitlePicker.launch("*/*") }
+                            GlassCircleButton(
+                                size = 40.dp,
+                                icon = Icons.Rounded.Equalizer,
+                                description = "Equalizer",
+                                iconSize = 20.dp
+                            ) { showEqualizer = true }
+                            if (pipEnabled) {
+                                GlassCircleButton(
+                                    size = 40.dp,
+                                    icon = Icons.Rounded.PictureInPictureAlt,
+                                    description = "Picture-in-picture",
+                                    iconSize = 20.dp
+                                ) { enterPip() }
+                            }
+                            GlassCircleButton(
+                                size = 40.dp,
+                                icon = Icons.Rounded.ScreenRotation,
+                                description = "Rotate",
+                                iconSize = 20.dp
+                            ) { rotate() }
+                            GlassCircleButton(
+                                size = 40.dp,
+                                icon = Icons.Rounded.MoreVert,
+                                description = "More",
+                                iconSize = 20.dp
+                            ) { showVideoInfo = true }
+                        }
                     }
                 }
 
-                // Center transport controls: fade + slight scale (~300ms),
-                // never an abrupt appear/disappear.
+                // Center transport: exactly one row of five uniform circular
+                // glass buttons, evenly spaced across the full width.
                 AnimatedVisibility(
                     visible = controlsVisible && !locked,
                     enter = fadeIn(animationSpec = tween(300)) +
@@ -608,22 +732,37 @@ fun VideoPlayerScreen(
                     modifier = Modifier.align(Alignment.Center)
                 ) {
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(20.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TextButton(
-                            label = "-${doubleTapStep}s",
-                            onClick = { playerVm.seekRelative(-doubleTapStep * 1000L) }
-                        )
-                        IconButton(onClick = { playerVm.playPrevious() }, modifier = Modifier.size(56.dp)) {
-                            Icon(Icons.Rounded.SkipPrevious, "Previous", tint = Color.White, modifier = Modifier.size(40.dp))
-                        }
+                        GlassCircleButton(
+                            size = 64.dp,
+                            icon = Icons.Rounded.SkipPrevious,
+                            description = "Previous",
+                            iconSize = 32.dp
+                        ) { playerVm.playPrevious() }
+                        GlassCircleButton(
+                            size = 64.dp,
+                            icon = Icons.Rounded.Replay10,
+                            description = "Back ${doubleTapStep} seconds",
+                            iconSize = 32.dp
+                        ) { playerVm.seekRelative(-doubleTapStep * 1000L) }
+                        // Play / pause: larger, glowing with the accent gradient.
                         Box(
                             modifier = Modifier
-                                .size(76.dp)
+                                .size(88.dp)
+                                .shadow(
+                                    16.dp,
+                                    CircleShape,
+                                    ambientColor = LocalAccent.current.start.copy(alpha = 0.55f),
+                                    spotColor = LocalAccent.current.start.copy(alpha = 0.55f)
+                                )
+                                .background(LocalAccent.current.brush, CircleShape)
+                                .border(1.dp, Color.White.copy(alpha = 0.6f), CircleShape)
                                 .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.18f))
-                                .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape)
                                 .clickable { playerVm.togglePlay() },
                             contentAlignment = Alignment.Center
                         ) {
@@ -631,160 +770,213 @@ fun VideoPlayerScreen(
                                 imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                 contentDescription = if (isPlaying) "Pause" else "Play",
                                 tint = Color.White,
-                                modifier = Modifier.size(40.dp)
+                                modifier = Modifier.size(44.dp)
                             )
                         }
-                        IconButton(onClick = { playerVm.playNext() }, modifier = Modifier.size(56.dp)) {
-                            Icon(Icons.Rounded.SkipNext, "Next", tint = Color.White, modifier = Modifier.size(40.dp))
-                        }
-                        TextButton(
-                            label = "+${doubleTapStep}s",
-                            onClick = { playerVm.seekRelative(doubleTapStep * 1000L) }
-                        )
+                        GlassCircleButton(
+                            size = 64.dp,
+                            icon = Icons.Rounded.Forward10,
+                            description = "Forward ${doubleTapStep} seconds",
+                            iconSize = 32.dp
+                        ) { playerVm.seekRelative(doubleTapStep * 1000L) }
+                        GlassCircleButton(
+                            size = 64.dp,
+                            icon = Icons.Rounded.SkipNext,
+                            description = "Next",
+                            iconSize = 32.dp
+                        ) { playerVm.playNext() }
                     }
                 }
 
-                // Bottom bar: seek + options.
-                Column(
+                // Bottom panel: a single glass panel holding the seek row,
+                // one transport row of pills, and one utility row of pills.
+                GlassCard(
+                    radius = 24.dp,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.35f))
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = formatDuration(scrubFraction?.let { (it * duration).toLong() } ?: position),
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Slider(
-                            value = scrubFraction ?: if (duration > 0) {
-                                position.toFloat() / duration.toFloat()
-                            } else 0f,
-                            onValueChange = {
-                                scrubFraction = it
-                                // Bug 6: live time preview bubble + smooth
-                                // scrub — the video follows the thumb
-                                // (throttled live seeks), settling on release.
-                                val previewMs = (it * duration).toLong()
-                                overlay = GestureOverlay.Seek(previewMs, duration)
-                                val now = System.currentTimeMillis()
-                                if (now - lastSliderSeekMs > 150L) {
-                                    lastSliderSeekMs = now
-                                    playerVm.seekTo(previewMs)
-                                }
-                            },
-                            onValueChangeFinished = {
-                                scrubFraction?.let {
-                                    playerVm.seekTo((it * duration).toLong())
-                                }
-                                scrubFraction = null
-                                overlay = null
-                            },
-                            colors = SliderDefaults.colors(
-                                thumbColor = Color.White,
-                                activeTrackColor = LocalAccent.current.start,
-                                inactiveTrackColor = Color.White.copy(alpha = 0.25f)
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                        )
-                        Text(
-                            text = formatDuration(duration),
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                    // Bug 8: MX Player style transport on the seek-bar row.
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
+                    val seekFraction = scrubFraction
+                        ?: if (duration > 0) position.toFloat() / duration.toFloat() else 0f
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
                     ) {
-                        IconButton(onClick = { playerVm.playPrevious() }, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Rounded.SkipPrevious, "Previous", tint = Color.White)
-                        }
-                        TextButton(
-                            label = "-${doubleTapStep}s",
-                            onClick = { playerVm.seekRelative(-doubleTapStep * 1000L) }
-                        )
-                        TextButton(
-                            label = "+${doubleTapStep}s",
-                            onClick = { playerVm.seekRelative(doubleTapStep * 1000L) }
-                        )
-                        IconButton(onClick = { playerVm.playNext() }, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Rounded.SkipNext, "Next", tint = Color.White)
-                        }
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box {
-                            TextButton(
-                                label = "${speed}x",
-                                onClick = { showSpeedMenu = true }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = formatDuration(
+                                    scrubFraction?.let { (it * duration).toLong() } ?: position
+                                ),
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
                             )
-                            DropdownMenu(
-                                expanded = showSpeedMenu,
-                                onDismissRequest = { showSpeedMenu = false }
+                            // Gradient accent track + white thumb. The stock
+                            // Slider cannot draw a gradient track, so its
+                            // own track is transparent and a gradient bar is
+                            // drawn underneath it.
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                playerVm.speedOptions.forEach { option ->
-                                    DropdownMenuItem(
-                                        text = { Text("${option}x") },
-                                        onClick = {
-                                            playerVm.setSpeed(option)
-                                            showSpeedMenu = false
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(5.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(Color.White.copy(alpha = 0.12f))
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.CenterStart)
+                                        .fillMaxWidth(seekFraction.coerceIn(0f, 1f))
+                                        .height(5.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(LocalAccent.current.brush)
+                                )
+                                Slider(
+                                    value = seekFraction,
+                                    onValueChange = {
+                                        scrubFraction = it
+                                        // Live time preview bubble + smooth
+                                        // scrub — the video follows the thumb
+                                        // (throttled live seeks), settling
+                                        // on release.
+                                        val previewMs = (it * duration).toLong()
+                                        overlay = GestureOverlay.Seek(previewMs, duration)
+                                        val now = System.currentTimeMillis()
+                                        if (now - lastSliderSeekMs > 150L) {
+                                            lastSliderSeekMs = now
+                                            playerVm.seekTo(previewMs)
                                         }
-                                    )
-                                }
+                                    },
+                                    onValueChangeFinished = {
+                                        scrubFraction?.let {
+                                            playerVm.seekTo((it * duration).toLong())
+                                        }
+                                        scrubFraction = null
+                                        overlay = null
+                                    },
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = Color.White,
+                                        activeTrackColor = Color.Transparent,
+                                        inactiveTrackColor = Color.Transparent
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
                             }
+                            Text(
+                                text = formatDuration(duration),
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
+                            )
                         }
-                        TextButton(
-                            label = when (aspect) {
-                                VideoAspect.FIT -> "Fit"
-                                VideoAspect.FILL -> "Fill"
-                                VideoAspect.ZOOM -> "Zoom"
-                            },
-                            onClick = { playerVm.cycleAspect() }
-                        )
-                        IconButton(
-                            onClick = { playerVm.setLocked(true) },
-                            modifier = Modifier.size(48.dp)
+                        // Transport pills — the only transport row down here.
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Rounded.LockOpen, "Lock screen", tint = Color.White)
+                            GlassPillButton(
+                                modifier = Modifier.weight(1f),
+                                icon = Icons.Rounded.SkipPrevious,
+                                onClick = { playerVm.playPrevious() }
+                            )
+                            GlassPillButton(
+                                modifier = Modifier.weight(1f),
+                                text = "-${doubleTapStep}s",
+                                onClick = { playerVm.seekRelative(-doubleTapStep * 1000L) }
+                            )
+                            GlassPillButton(
+                                modifier = Modifier.weight(1f),
+                                text = "+${doubleTapStep}s",
+                                onClick = { playerVm.seekRelative(doubleTapStep * 1000L) }
+                            )
+                            GlassPillButton(
+                                modifier = Modifier.weight(1f),
+                                icon = Icons.Rounded.SkipNext,
+                                onClick = { playerVm.playNext() }
+                            )
                         }
-                        TextButton(
-                            label = if (backgroundPlay) "BG On" else "BG Off",
-                            onClick = { settingsVm.setBackgroundPlay(!backgroundPlay) }
-                        )
-                        IconButton(onClick = onOpenPlaylist, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Rounded.PlaylistPlay, "Playlist", tint = Color.White)
-                        }
-                        TextButton(
-                            label = when (abState) {
-                                PlayerViewModel.ABState.OFF -> "A-B"
-                                PlayerViewModel.ABState.A_SET -> "A…"
-                                PlayerViewModel.ABState.LOOPING -> "A-B ●"
-                            },
-                            enabled = abRepeatEnabled,
-                            onClick = {
-                                if (abRepeatEnabled) {
-                                    playerVm.cycleABRepeat()
-                                } else {
-                                    Toast.makeText(
-                                        context,
-                                        "Enable A-B repeat in Settings > Playback",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                        // Utility pills.
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(modifier = Modifier.weight(1f)) {
+                                GlassPillButton(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    text = "${speed}x",
+                                    onClick = { showSpeedMenu = true }
+                                )
+                                DropdownMenu(
+                                    expanded = showSpeedMenu,
+                                    onDismissRequest = { showSpeedMenu = false }
+                                ) {
+                                    playerVm.speedOptions.forEach { option ->
+                                        DropdownMenuItem(
+                                            text = { Text("${option}x") },
+                                            onClick = {
+                                                playerVm.setSpeed(option)
+                                                showSpeedMenu = false
+                                            }
+                                        )
+                                    }
                                 }
                             }
-                        )
+                            GlassPillButton(
+                                modifier = Modifier.weight(1f),
+                                text = when (aspect) {
+                                    VideoAspect.FIT -> "Fit"
+                                    VideoAspect.FILL -> "Fill"
+                                    VideoAspect.ZOOM -> "Zoom"
+                                },
+                                onClick = { playerVm.cycleAspect() }
+                            )
+                            GlassPillButton(
+                                modifier = Modifier.weight(1f),
+                                icon = Icons.Rounded.LockOpen,
+                                onClick = { playerVm.setLocked(true) }
+                            )
+                            GlassPillButton(
+                                modifier = Modifier.weight(1f),
+                                text = if (backgroundPlay) "BG On" else "BG Off",
+                                onClick = { settingsVm.setBackgroundPlay(!backgroundPlay) }
+                            )
+                            GlassPillButton(
+                                modifier = Modifier.weight(1f),
+                                icon = Icons.Rounded.PlaylistPlay,
+                                onClick = onOpenPlaylist
+                            )
+                            GlassPillButton(
+                                modifier = Modifier.weight(1f),
+                                text = when (abState) {
+                                    PlayerViewModel.ABState.OFF -> "A-B"
+                                    PlayerViewModel.ABState.A_SET -> "A…"
+                                    PlayerViewModel.ABState.LOOPING -> "A-B ●"
+                                },
+                                enabled = abRepeatEnabled,
+                                onClick = {
+                                    if (abRepeatEnabled) {
+                                        playerVm.cycleABRepeat()
+                                    } else {
+                                        Toast.makeText(
+                                            context,
+                                            "Enable A-B repeat in Settings > Playback",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -832,32 +1024,81 @@ fun VideoPlayerScreen(
     }
 }
 
+/** Uniform circular glass button (top-bar icons and center transport). */
 @Composable
-private fun TextButton(
-    label: String,
-    onClick: () -> Unit,
-    enabled: Boolean = true
+private fun GlassCircleButton(
+    size: Dp,
+    icon: ImageVector,
+    description: String,
+    iconSize: Dp = 28.dp,
+    onClick: () -> Unit
 ) {
     Box(
         modifier = Modifier
-            .height(48.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color.White.copy(alpha = if (enabled) 0.14f else 0.05f))
-            .border(
-                1.dp,
-                Color.White.copy(alpha = if (enabled) 0.3f else 0.12f),
-                RoundedCornerShape(24.dp)
-            )
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 14.dp),
+            .size(size)
+            .shadow(6.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.3f))
+            .background(Color.White.copy(alpha = 0.12f), CircleShape)
+            .border(1.dp, Color.White.copy(alpha = 0.45f), CircleShape)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = label,
-            color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = Color.White,
+            modifier = Modifier.size(iconSize)
         )
+    }
+}
+
+/** Uniform glass pill (bottom transport and utility rows). */
+@Composable
+private fun GlassPillButton(
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    text: String? = null,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .height(40.dp)
+            .background(
+                Color.White.copy(alpha = if (enabled) 0.12f else 0.05f),
+                RoundedCornerShape(20.dp)
+            )
+            .border(
+                1.dp,
+                Color.White.copy(alpha = if (enabled) 0.35f else 0.12f),
+                RoundedCornerShape(20.dp)
+            )
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (enabled) Color.White else Color.White.copy(alpha = 0.45f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            if (text != null) {
+                Text(
+                    text = text,
+                    color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+            }
+        }
     }
 }
 

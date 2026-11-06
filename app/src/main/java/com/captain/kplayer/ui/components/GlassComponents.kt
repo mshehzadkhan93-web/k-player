@@ -47,10 +47,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -60,6 +63,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.captain.kplayer.ui.theme.LocalAccent
 import com.captain.kplayer.ui.theme.LocalGlassAlpha
+import com.captain.kplayer.ui.theme.LocalTheme
 import com.captain.kplayer.ui.theme.TextMuted
 import com.captain.kplayer.ui.theme.TextPrimary
 import com.captain.kplayer.ui.theme.TextSecondary
@@ -68,23 +72,30 @@ import com.captain.kplayer.ui.theme.TextSecondary
 enum class HomeTab { VIDEOS, MUSIC, FOLDERS, NETWORK, SETTINGS }
 
 /**
- * Clear-glass fill: low white alpha (about 8-12% at the default glass
- * setting) so content stays visible through the panel — no heavy frost.
+ * Frosted-glass fill: a layered vertical white gradient, bright at the
+ * top (~10%) and fading to ~3% at the bottom, with a whisper of the
+ * current theme's card tint washed through the middle stop so the
+ * panel follows the theme. The fill stays translucent on purpose —
+ * content behind the panel must stay visibly showing through it.
  * The fill strength still follows the glass intensity from Settings >
- * Appearance, scaled down to the clear-glass range.
+ * Appearance, scaled inside the clear-glass range.
  */
-private fun glassBrush(alpha: Float): Brush {
+private fun glassBrush(alpha: Float, tint: Color = Color.White): Brush {
     return Brush.verticalGradient(
         listOf(
-            Color.White.copy(alpha = 0.08f + alpha * 0.06f),
-            Color.White.copy(alpha = 0.02f + alpha * 0.03f)
+            Color.White.copy(alpha = 0.10f + alpha * 0.04f),
+            tint.copy(alpha = 0.05f + alpha * 0.02f),
+            Color.White.copy(alpha = 0.03f + alpha * 0.015f)
         )
     )
 }
 
 /**
- * Clear-glass edge: a thin bright white border (~45% white) plus a
- * subtle top-light inner glow that fades toward the bottom edge.
+ * Frosted-glass edge: a bright 1dp white border (~45% white) plus a
+ * second inner border that is bright at the top and fades toward the
+ * bottom, and a thin light highlight line drawn along the top edge —
+ * the three layers together are what make the surface read as glass
+ * instead of a flat translucent box.
  */
 private fun Modifier.glassEdge(shape: RoundedCornerShape): Modifier {
     return this
@@ -93,19 +104,37 @@ private fun Modifier.glassEdge(shape: RoundedCornerShape): Modifier {
             1.dp,
             Brush.verticalGradient(
                 listOf(
-                    Color.White.copy(alpha = 0.20f),
+                    Color.White.copy(alpha = 0.22f),
                     Color.White.copy(alpha = 0.02f)
                 )
             ),
             shape
         )
+        .drawWithContent {
+            drawContent()
+            val y = 1.5.dp.toPx()
+            drawLine(
+                brush = Brush.horizontalGradient(
+                    listOf(
+                        Color.Transparent,
+                        Color.White.copy(alpha = 0.55f),
+                        Color.Transparent
+                    )
+                ),
+                start = Offset(size.width * 0.08f, y),
+                end = Offset(size.width * 0.92f, y),
+                strokeWidth = 1.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+        }
 }
 
 /**
- * Clear-glass panel: low-alpha white fill, thin bright white border
- * with a subtle inner glow, rounded corners and a soft shadow. Content
- * behind the panel stays faintly visible through it. The fill strength
- * follows the glass intensity from Settings > Appearance.
+ * Frosted-glass panel: translucent layered fill, bright white border
+ * with a top-edge light highlight, rounded corners, a soft drop
+ * shadow and a soft accent glow behind the panel. Content behind the
+ * panel stays faintly visible through it. The fill strength follows
+ * the glass intensity from Settings > Appearance.
  * [opaque] renders a solid surface instead (used by sheets and dialogs
  * so nothing bleeds through from behind).
  */
@@ -118,9 +147,17 @@ fun GlassCard(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val alpha = LocalGlassAlpha.current
+    val accent = LocalAccent.current
+    val cardTint = LocalTheme.current.cardTintColor
     val shape = RoundedCornerShape(radius)
     var cardModifier = modifier
-        .shadow(10.dp, shape, ambientColor = Color.Black.copy(alpha = 0.35f))
+        .shadow(
+            12.dp,
+            shape,
+            ambientColor = Color.Black.copy(alpha = 0.35f),
+            spotColor = if (opaque) Color.Black.copy(alpha = 0.25f)
+            else accent.glowColor.copy(alpha = 0.22f)
+        )
         .then(
             if (opaque) {
                 Modifier
@@ -128,7 +165,7 @@ fun GlassCard(
                     .border(1.dp, Color.White.copy(alpha = 0.12f), shape)
             } else {
                 Modifier
-                    .background(glassBrush(alpha), shape)
+                    .background(glassBrush(alpha, cardTint), shape)
                     .glassEdge(shape)
             }
         )
@@ -137,6 +174,38 @@ fun GlassCard(
         cardModifier = cardModifier.clickable(onClick = onClick)
     }
     Column(modifier = cardModifier, content = content)
+}
+
+/**
+ * Frosted-glass panel with row content: the same layered glass fill,
+ * bright border and top highlight as [GlassCard], for toolbars and
+ * horizontal rows.
+ */
+@Composable
+fun GlassPanel(
+    modifier: Modifier = Modifier,
+    radius: Dp = 24.dp,
+    onClick: (() -> Unit)? = null,
+    content: @Composable RowScope.() -> Unit
+) {
+    val alpha = LocalGlassAlpha.current
+    val accent = LocalAccent.current
+    val cardTint = LocalTheme.current.cardTintColor
+    val shape = RoundedCornerShape(radius)
+    var panelModifier = modifier
+        .shadow(
+            12.dp,
+            shape,
+            ambientColor = Color.Black.copy(alpha = 0.35f),
+            spotColor = accent.glowColor.copy(alpha = 0.22f)
+        )
+        .background(glassBrush(alpha, cardTint), shape)
+        .glassEdge(shape)
+        .clip(shape)
+    if (onClick != null) {
+        panelModifier = panelModifier.clickable(onClick = onClick)
+    }
+    Row(modifier = panelModifier, content = content)
 }
 
 /** Glass button with an icon and label, 48dp minimum height, press scale. */
@@ -154,12 +223,19 @@ fun GlassButton(
         targetValue = if (pressed) 0.95f else 1f, label = "glassButtonPress"
     )
     val alpha = LocalGlassAlpha.current
+    val accent = LocalAccent.current
+    val cardTint = LocalTheme.current.cardTintColor
     Box(
         modifier = modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .height(48.dp)
-            .shadow(6.dp, RoundedCornerShape(24.dp), ambientColor = Color.Black.copy(alpha = 0.3f))
-            .background(glassBrush(alpha), RoundedCornerShape(24.dp))
+            .shadow(
+                6.dp,
+                RoundedCornerShape(24.dp),
+                ambientColor = Color.Black.copy(alpha = 0.3f),
+                spotColor = accent.glowColor.copy(alpha = 0.18f)
+            )
+            .background(glassBrush(alpha, cardTint), RoundedCornerShape(24.dp))
             .glassEdge(RoundedCornerShape(24.dp))
             .clip(RoundedCornerShape(24.dp))
             .clickable(
@@ -191,7 +267,7 @@ fun GlassButton(
     }
 }
 
-/** Primary call-to-action button with the cyan-to-pink accent gradient. */
+/** Primary call-to-action button with the current theme's accent gradient. */
 @Composable
 fun AccentGradientButton(
     onClick: () -> Unit,
@@ -347,7 +423,7 @@ fun GlassTextField(
     )
 }
 
-/** Clear-glass bottom navigation bar with five tabs. Semi-transparent so the list scrolling underneath stays faintly visible through it. */
+/** Frosted-glass bottom navigation bar with five tabs. Semi-transparent so the list scrolling underneath stays faintly visible through it. */
 @Composable
 fun GlassBottomBar(
     selected: HomeTab,
@@ -355,6 +431,7 @@ fun GlassBottomBar(
     modifier: Modifier = Modifier
 ) {
     val accent = LocalAccent.current
+    val cardTint = LocalTheme.current.cardTintColor
     val items = listOf(
         HomeTab.VIDEOS to "Videos",
         HomeTab.MUSIC to "Music",
@@ -373,8 +450,13 @@ fun GlassBottomBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(8.dp, RoundedCornerShape(24.dp), ambientColor = Color.Black.copy(alpha = 0.25f))
-            .background(glassBrush(alpha), RoundedCornerShape(24.dp))
+            .shadow(
+                8.dp,
+                RoundedCornerShape(24.dp),
+                ambientColor = Color.Black.copy(alpha = 0.25f),
+                spotColor = accent.glowColor.copy(alpha = 0.18f)
+            )
+            .background(glassBrush(alpha, cardTint), RoundedCornerShape(24.dp))
             .glassEdge(RoundedCornerShape(24.dp))
             .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceEvenly

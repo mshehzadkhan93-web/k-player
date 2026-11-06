@@ -508,17 +508,21 @@ class PlayerViewModel(
             _playerError.value = "Player is still starting — try again in a moment."
             return
         }
-        _queue.value = entries
-        _currentIndex.value = startIndex
-        _currentEntry.value = entries.getOrNull(startIndex)
         val items = entries.map { PlayerFactory.mediaItem(it.url, it.title, it.subtitle) }
+        // Queue state is only published AFTER setMediaItems succeeds: if it
+        // throws, the UI must not claim the new queue while ExoPlayer still
+        // holds the previous (e.g. device-video) playlist.
         try {
             player.setMediaItems(items, startIndex, 0L)
             player.prepare()
             player.playWhenReady = true
         } catch (e: Exception) {
             _playerError.value = "Couldn't start playback: ${e.message ?: "unknown error"}"
+            return
         }
+        _queue.value = entries
+        _currentIndex.value = startIndex
+        _currentEntry.value = entries.getOrNull(startIndex)
     }
 
     // ------------------------------------------------------------------

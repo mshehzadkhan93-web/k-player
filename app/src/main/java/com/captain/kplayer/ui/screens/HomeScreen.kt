@@ -6,6 +6,11 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,9 +28,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
@@ -93,7 +101,10 @@ fun HomeScreen(
     settingsVm: SettingsViewModel
 ) {
     val context = LocalContext.current
-    var tab by remember { mutableStateOf(HomeTab.VIDEOS) }
+    // Task C: the selected tab lives in LibraryViewModel (StateFlow), so it
+    // survives HOME leaving composition on forward navigation — Back returns
+    // to the tab the user was on instead of always resetting to Videos.
+    val tab by libraryVm.selectedTab.collectAsState()
     val query by libraryVm.searchQuery.collectAsState()
     val usingDeviceMedia by libraryVm.usingDeviceMedia.collectAsState()
     val currentEntry by playerVm.currentEntry.collectAsState()
@@ -231,10 +242,11 @@ fun HomeScreen(
                         navController = navController
                     )
                     HomeTab.SETTINGS -> {
-                        // Settings opens as its own screen.
+                        // Settings opens as its own screen. The tab is
+                        // deliberately NOT reset here (Task C): Back from
+                        // Settings returns to the tab it was opened from.
                         LaunchedEffect(Unit) {
                             navController.navigate(Routes.SETTINGS)
-                            tab = HomeTab.VIDEOS
                         }
                     }
                 }
@@ -255,7 +267,7 @@ fun HomeScreen(
                     if (selected == HomeTab.SETTINGS) {
                         navController.navigate(Routes.SETTINGS)
                     } else {
-                        tab = selected
+                        libraryVm.selectTab(selected)
                     }
                 },
                 modifier = Modifier.padding(vertical = 12.dp)
@@ -275,175 +287,240 @@ private fun VideosTab(
     val videos by libraryVm.visibleVideos.collectAsState()
     val continueWatching by libraryVm.continueWatching.collectAsState()
     val recentlyPlayed by libraryVm.recentlyPlayed.collectAsState()
-    val sortMode by libraryVm.sortMode.collectAsState()
     val viewMode by libraryVm.viewMode.collectAsState()
     val filter by libraryVm.resolutionFilter.collectAsState()
     var showSortMenu by remember { mutableStateOf(false) }
 
+    // Task G: Recently Played is a collapsing section — it folds up (height
+    // animates to 0) once the All Videos list scrolls down, so the grid
+    // gets the space, and expands again when scrolled back to the top.
+    // The scroll state of the active list/grid drives it.
+    val gridState = rememberLazyGridState()
+    val listState = rememberLazyListState()
+    val recentCollapsed = if (viewMode == VideoViewMode.GRID) {
+        gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0
+    } else {
+        listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0
+    }
+    val playVideo: (VideoItem) -> Unit = { video ->
+        playerVm.playVideo(video, videos)
+        navController.navigate(Routes.PLAYER)
+    }
+    val allVideosHeader: @Composable () -> Unit = {
+        AllVideosHeader(
+            filter = filter,
+            onFilterSelected = { libraryVm.setResolutionFilter(it) },
+            viewMode = viewMode,
+            showSortMenu = showSortMenu,
+            onShowSortMenuChange = { showSortMenu = it },
+            onSortSelected = { sort ->
+                libraryVm.setSortMode(sort)
+                settingsVm.setDefaultSort(sort.name.lowercase())
+                showSortMenu = false
+            },
+            onToggleView = {
+                libraryVm.toggleViewMode()
+                settingsVm.setDefaultView(
+                    if (viewMode == VideoViewMode.GRID) "list" else "grid"
+                )
+            }
+        )
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
-        // Part D: Recently Played, above Continue Watching.
-        if (recentlyPlayed.isNotEmpty()) {
-            Text(
-                text = "Recently Played",
-                color = TextPrimary,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(recentlyPlayed, key = { it.id }) { video ->
-                    RecentCard(video) {
-                        playerVm.playVideo(video, videos)
-                        navController.navigate(Routes.PLAYER)
+        AnimatedVisibility(
+            visible = recentlyPlayed.isNotEmpty() && !recentCollapsed,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Column {
+                Text(
+                    text = "Recently Played",
+                    color = TextPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(recentlyPlayed, key = { it.id }) { video ->
+                        RecentCard(video) { playVideo(video) }
                     }
                 }
+                Spacer(modifier = Modifier.height(20.dp))
             }
-            Spacer(modifier = Modifier.height(18.dp))
         }
-        if (continueWatching.isNotEmpty()) {
-            Text(
-                text = "Continue Watching",
-                color = TextPrimary,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(continueWatching, key = { it.id }) { video ->
-                    ContinueCard(video) {
-                        playerVm.playVideo(video, videos)
-                        navController.navigate(Routes.PLAYER)
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(18.dp))
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "All Videos",
-                color = TextPrimary,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            listOf("All", "HD", "4K").forEach { label ->
-                val selected = filter == label
-                Box(
-                    modifier = Modifier
-                        .padding(end = 4.dp)
-                        .clickable { libraryVm.setResolutionFilter(label) }
+        Box(modifier = Modifier.weight(1f)) {
+            if (viewMode == VideoViewMode.GRID) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    state = gridState,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    contentPadding = PaddingValues(bottom = 12.dp)
                 ) {
-                    Text(
-                        text = label,
-                        color = if (selected) LocalAccent.current.start else TextMuted,
-                        fontSize = 13.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 12.dp)
-                    )
+                    if (continueWatching.isNotEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            ContinueWatchingSection(
+                                videos = continueWatching,
+                                onPlay = playVideo
+                            )
+                        }
+                    }
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        allVideosHeader()
+                    }
+                    if (showSampleHint) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                text = "Showing sample library — allow media access to see your files.",
+                                color = TextMuted,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                        }
+                    }
+                    items(videos, key = { it.id }) { video ->
+                        VideoCard(video) { playVideo(video) }
+                    }
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(bottom = 12.dp)
+                ) {
+                    if (continueWatching.isNotEmpty()) {
+                        item {
+                            ContinueWatchingSection(
+                                videos = continueWatching,
+                                onPlay = playVideo
+                            )
+                        }
+                    }
+                    item {
+                        allVideosHeader()
+                    }
+                    if (showSampleHint) {
+                        item {
+                            Text(
+                                text = "Showing sample library — allow media access to see your files.",
+                                color = TextMuted,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                        }
+                    }
+                    items(videos, key = { it.id }) { video ->
+                        VideoRow(video) { playVideo(video) }
+                    }
                 }
             }
-            IconButton(
-                onClick = { showSortMenu = true },
-                modifier = Modifier.size(48.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Sort,
-                    contentDescription = "Sort",
-                    tint = TextPrimary
-                )
+        }
+    }
+}
+
+/** Continue Watching row, unchanged in behaviour — full-width section. */
+@Composable
+private fun ContinueWatchingSection(
+    videos: List<VideoItem>,
+    onPlay: (VideoItem) -> Unit
+) {
+    Column {
+        Text(
+            text = "Continue Watching",
+            color = TextPrimary,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(videos, key = { it.id }) { video ->
+                ContinueCard(video) { onPlay(video) }
             }
-            DropdownMenu(
-                expanded = showSortMenu,
-                onDismissRequest = { showSortMenu = false }
+        }
+        Spacer(modifier = Modifier.height(20.dp))
+    }
+}
+
+/** "All Videos" header row: title, resolution filters, sort menu, view toggle. */
+@Composable
+private fun AllVideosHeader(
+    filter: String,
+    onFilterSelected: (String) -> Unit,
+    viewMode: VideoViewMode,
+    showSortMenu: Boolean,
+    onShowSortMenuChange: (Boolean) -> Unit,
+    onSortSelected: (VideoSort) -> Unit,
+    onToggleView: () -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = "All Videos",
+            color = TextPrimary,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.weight(1f))
+        listOf("All", "HD", "4K").forEach { label ->
+            val selected = filter == label
+            Box(
+                modifier = Modifier
+                    .padding(end = 4.dp)
+                    .clickable { onFilterSelected(label) }
             ) {
-                DropdownMenuItem(
-                    text = { Text("Name") },
-                    onClick = {
-                        libraryVm.setSortMode(VideoSort.NAME)
-                        settingsVm.setDefaultSort("name")
-                        showSortMenu = false
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("Date added") },
-                    onClick = {
-                        libraryVm.setSortMode(VideoSort.DATE)
-                        settingsVm.setDefaultSort("date")
-                        showSortMenu = false
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("Size") },
-                    onClick = {
-                        libraryVm.setSortMode(VideoSort.SIZE)
-                        settingsVm.setDefaultSort("size")
-                        showSortMenu = false
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("Duration") },
-                    onClick = {
-                        libraryVm.setSortMode(VideoSort.DURATION)
-                        settingsVm.setDefaultSort("duration")
-                        showSortMenu = false
-                    }
-                )
-            }
-            IconButton(
-                onClick = {
-                    libraryVm.toggleViewMode()
-                    settingsVm.setDefaultView(
-                        if (viewMode == VideoViewMode.GRID) "list" else "grid"
-                    )
-                },
-                modifier = Modifier.size(48.dp)
-            ) {
-                Icon(
-                    imageVector = if (viewMode == VideoViewMode.GRID) {
-                        Icons.Rounded.ViewList
-                    } else {
-                        Icons.Rounded.GridView
-                    },
-                    contentDescription = "Toggle view",
-                    tint = TextPrimary
+                Text(
+                    text = label,
+                    color = if (selected) LocalAccent.current.start else TextMuted,
+                    fontSize = 13.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 12.dp)
                 )
             }
         }
-        if (showSampleHint) {
-            Text(
-                text = "Showing sample library — allow media access to see your files.",
-                color = TextMuted,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(bottom = 8.dp)
+        IconButton(
+            onClick = { onShowSortMenuChange(true) },
+            modifier = Modifier.size(48.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Sort,
+                contentDescription = "Sort",
+                tint = TextPrimary
             )
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        if (viewMode == VideoViewMode.GRID) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 8.dp)
-            ) {
-                items(videos, key = { it.id }) { video ->
-                    VideoCard(video) {
-                        playerVm.playVideo(video, videos)
-                        navController.navigate(Routes.PLAYER)
-                    }
-                }
-            }
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(bottom = 8.dp)
-            ) {
-                items(videos, key = { it.id }) { video ->
-                    VideoRow(video) {
-                        playerVm.playVideo(video, videos)
-                        navController.navigate(Routes.PLAYER)
-                    }
-                }
-            }
+        DropdownMenu(
+            expanded = showSortMenu,
+            onDismissRequest = { onShowSortMenuChange(false) }
+        ) {
+            DropdownMenuItem(
+                text = { Text("Name") },
+                onClick = { onSortSelected(VideoSort.NAME) }
+            )
+            DropdownMenuItem(
+                text = { Text("Date added") },
+                onClick = { onSortSelected(VideoSort.DATE) }
+            )
+            DropdownMenuItem(
+                text = { Text("Size") },
+                onClick = { onSortSelected(VideoSort.SIZE) }
+            )
+            DropdownMenuItem(
+                text = { Text("Duration") },
+                onClick = { onSortSelected(VideoSort.DURATION) }
+            )
+        }
+        IconButton(
+            onClick = onToggleView,
+            modifier = Modifier.size(48.dp)
+        ) {
+            Icon(
+                imageVector = if (viewMode == VideoViewMode.GRID) {
+                    Icons.Rounded.ViewList
+                } else {
+                    Icons.Rounded.GridView
+                },
+                contentDescription = "Toggle view",
+                tint = TextPrimary
+            )
         }
     }
 }
@@ -466,11 +543,12 @@ private fun VideoCard(video: VideoItem, onClick: () -> Unit) {
                 modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
             )
         }
-        Column(modifier = Modifier.padding(12.dp)) {
+        // Task G: tighter card text for the 3-per-row grid.
+        Column(modifier = Modifier.padding(10.dp)) {
             Text(
                 text = video.title,
                 color = TextPrimary,
-                fontSize = 14.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -478,12 +556,12 @@ private fun VideoCard(video: VideoItem, onClick: () -> Unit) {
             Text(
                 text = "${video.genre} • ${formatDuration(video.durationMs)}",
                 color = TextSecondary,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             if (video.resumeMs > 0) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 GlassProgressBar(progress = video.resumeMs.toFloat() / video.durationMs)
             }
         }
@@ -856,7 +934,14 @@ private fun NetworkTab(
                             if (playerVm.playStream(stream)) {
                                 navController.navigate(Routes.PLAYER)
                             } else {
-                                error = "Couldn't start that stream."
+                                // Task D: a failed start is not always a bad
+                                // URL — say so when the player just isn't
+                                // built yet, instead of blaming the link.
+                                error = if (!playerVm.isPlayerReady) {
+                                    "Player is still starting — try again in a moment."
+                                } else {
+                                    "Couldn't start that stream."
+                                }
                             }
                         } else {
                             error = "Enter a valid http(s) URL."
@@ -897,7 +982,13 @@ private fun NetworkTab(
                             } else {
                                 Toast.makeText(
                                     context,
-                                    "That stream link is no longer valid.",
+                                    // Task D: don't blame the link when the
+                                    // player simply isn't built yet.
+                                    if (!playerVm.isPlayerReady) {
+                                        "Player is still starting — try again in a moment."
+                                    } else {
+                                        "That stream link is no longer valid."
+                                    },
                                     Toast.LENGTH_SHORT
                                 ).show()
                             }

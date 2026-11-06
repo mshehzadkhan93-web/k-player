@@ -6,10 +6,41 @@ on:
   pull_request:
   workflow_dispatch:
 
+# FFmpeg extension build (K-Player v1.2 — all-format codecs).
+#
+# Google does NOT publish androidx.media3:media3-ffmpeg-decoder as an AAR
+# (source-only extension), so CI builds it from source and wires the AAR
+# into the app. Verified against androidx/media tag 1.2.1 (2026-11-07):
+#  - Tag "1.2.1" exists. The module lives at libraries/decoder_ffmpeg
+#    (NOT extensions/ffmpeg — that path does not exist at 1.2.1) and its
+#    Gradle project is :lib-decoder-ffmpeg.
+#  - libraries/decoder_ffmpeg/README.md: FFmpeg 6.0 (branch release/6.0) is
+#    the recommended version; NDK r26b is the tested NDK; ANDROID_ABI is
+#    typically the app's minSdk (26 here) and must not exceed it.
+#  - build_ffmpeg.sh takes (FFMPEG_MODULE_PATH, NDK_PATH, HOST_PLATFORM,
+#    ANDROID_ABI, ENABLED_DECODERS...) and builds ALL FOUR ABIs in one run
+#    (armeabi-v7a, arm64-v8a, x86, x86_64) — there is no per-ABI flag.
+#    It does NOT download FFmpeg: the source must be cloned separately and
+#    symlinked to libraries/decoder_ffmpeg/src/main/jni/ffmpeg.
+#  - The extension is AUDIO-only (FfmpegAudioRenderer): it decodes DTS /
+#    DTS-HD / TrueHD / AC3 / E-AC3 etc. Video still decodes via MediaCodec;
+#    MKV containers are handled by ExoPlayer's built-in Matroska extractor.
+#  - First build takes ~20-30 min (FFmpeg x4 ABIs + extension AAR). The
+#    FFmpeg source + built libs are cached between runs (see cache step).
+env:
+  MEDIA3_TAG: "1.2.1"
+  FFMPEG_BRANCH: release/6.0
+  NDK_VERSION: 26.1.10909125 # NDK r26b — tested version per decoder_ffmpeg README
+  ANDROID_ABI: "26" # == app minSdk 26
+  # FFmpeg decoder names for the codecs K-Player must play: dca = DTS/DTS-HD,
+  # truehd/mlp = TrueHD, ac3/eac3 = Dolby Digital/Digital Plus, plus common audio.
+  ENABLED_DECODERS: "ac3 eac3 dca truehd mlp aac mp3float vorbis opus flac alac"
+
 jobs:
   build:
     name: Build debug APK
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -24,6 +55,80 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: "8.7"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK r26b and CMake
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          ls "$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" | head
+
+      - name: Check out androidx/media (tag 1.2.1)
+        uses: actions/checkout@v4
+        with:
+          repository: androidx/media
+          ref: ${{ env.MEDIA3_TAG }}
+          path: media
+          fetch-depth: 1
+
+      - name: Cache FFmpeg source + built libs
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: ffmpeg-src
+          # Keyed on the FFmpeg branch, the decoder list and the exact
+          # build_ffmpeg.sh from the media checkout, so any of those
+          # changing forces a rebuild.
+          key: ffmpeg-6.0-ac3-eac3-dca-truehd-mlp-aac-mp3float-vorbis-opus-flac-alac-${{ hashFiles('media/libraries/decoder_ffmpeg/src/main/jni/build_ffmpeg.sh') }}
+          restore-keys: |
+            ffmpeg-6.0-
+
+      - name: Build FFmpeg for Android (all 4 ABIs)
+        run: |
+          # Skip the expensive build when the cache already holds built libs.
+          if [ -f "ffmpeg-src/android-libs/arm64-v8a/libavcodec.a" ] && \
+             [ -f "ffmpeg-src/android-libs/armeabi-v7a/libavcodec.a" ]; then
+            echo "FFmpeg libs already built (cache hit) — skipping build_ffmpeg.sh"
+          else
+            if [ ! -d "ffmpeg-src" ]; then
+              git clone --depth 1 --branch "$FFMPEG_BRANCH" \
+                https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
+            fi
+            # build_ffmpeg.sh expects the FFmpeg source symlinked as
+            # libraries/decoder_ffmpeg/src/main/jni/ffmpeg
+            ln -sfn "$GITHUB_WORKSPACE/ffmpeg-src" \
+              "$GITHUB_WORKSPACE/media/libraries/decoder_ffmpeg/src/main/jni/ffmpeg"
+            cd "$GITHUB_WORKSPACE/media/libraries/decoder_ffmpeg/src/main/jni"
+            ./build_ffmpeg.sh \
+              "$GITHUB_WORKSPACE/media/libraries/decoder_ffmpeg/src/main" \
+              "$ANDROID_NDK_HOME" \
+              linux-x86_64 \
+              "$ANDROID_ABI" \
+              $ENABLED_DECODERS
+          fi
+          ls "$GITHUB_WORKSPACE/ffmpeg-src/android-libs/"*/libavcodec.a
+
+      - name: Build FFmpeg extension AAR
+        run: |
+          cd media
+          ./gradlew :lib-decoder-ffmpeg:assembleRelease --stacktrace
+
+      - name: Copy extension AAR into the app
+        run: |
+          AAR="$(find media/libraries/decoder_ffmpeg -name 'lib-decoder-ffmpeg-release.aar' -print -quit)"
+          if [ -z "$AAR" ]; then
+            echo "::error::lib-decoder-ffmpeg-release.aar not found under media/libraries/decoder_ffmpeg"
+            find media/libraries/decoder_ffmpeg -name '*.aar' -print
+            exit 1
+          fi
+          echo "Found AAR: $AAR"
+          mkdir -p app/libs
+          cp "$AAR" app/libs/lib-decoder-ffmpeg-release.aar
+          ls -lh app/libs/
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew

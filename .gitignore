@@ -11,3 +11,5 @@ captures
 local.properties
 *.apk
 *.aab
+*.aar
+/app/libs/

@@ -205,6 +205,16 @@ object SampleData {
         FolderItem("Documentaries", "/storage/Documentaries", 23, "docs")
     )
 
+    /**
+     * Sample network streams. Every URL below was verified live (HTTP 200,
+     * correct playlist/media content-type) on 2026-11-07. NOTE: the Google
+     * gtv-videos-bucket MP4s (e.g. BigBuckBunny.mp4) are NO LONGER public —
+     * the bucket now answers 403 AccessDenied to anonymous callers — so no
+     * sample stream may point at it. The BipBop entry below replaces the
+     * dead Big Buck Bunny MP4 stream; it is also visibly different content
+     * from every library video, so tapping a stream can no longer be
+     * mistaken for playing a library video.
+     */
     val recentStreams: List<StreamItem> = listOf(
         StreamItem(
             "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
@@ -217,8 +227,8 @@ object SampleData {
             "2 days ago"
         ),
         StreamItem(
-            "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-            "Big Buck Bunny (MP4)",
+            "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8",
+            "BipBop (Apple HLS)",
             "Last week"
         )
     )

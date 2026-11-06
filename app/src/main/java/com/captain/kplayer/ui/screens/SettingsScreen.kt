@@ -26,7 +26,6 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Remove
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -59,7 +58,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.navigation.NavHostController
 import com.captain.kplayer.ui.components.GlassButton
 import com.captain.kplayer.ui.components.GlassCard
-import com.captain.kplayer.ui.components.GlassTextField
 import com.captain.kplayer.ui.components.SectionHeader
 import com.captain.kplayer.ui.components.SettingRow
 import com.captain.kplayer.ui.theme.GradientBackground
@@ -123,8 +121,6 @@ fun SettingsScreen(
 
     var confirmClear by remember { mutableStateOf<String?>(null) }
     var showPrivacy by remember { mutableStateOf(false) }
-    var subtitleSearchQuery by remember { mutableStateOf("") }
-    var subtitleSearchResult by remember { mutableStateOf<String?>(null) }
     var storageRefresh by remember { mutableStateOf(0) }
     var storageText by remember { mutableStateOf("Calculating…") }
 
@@ -300,51 +296,6 @@ fun SettingsScreen(
                     options = listOf("UTF-8" to "UTF-8", "Auto" to "Auto"),
                     onSelect = { settingsVm.setSubtitleEncoding(it) }
                 )
-                // Subtitle search / download entry.
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        text = "Search subtitles",
-                        color = TextPrimary,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = "Searches online subtitle databases.",
-                        color = TextSecondary,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 2.dp, bottom = 10.dp)
-                    )
-                    GlassTextField(
-                        value = subtitleSearchQuery,
-                        onValueChange = { subtitleSearchQuery = it },
-                        placeholder = "Search subtitles, e.g. Big Buck Bunny",
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    GlassButton(
-                        onClick = {
-                            subtitleSearchResult =
-                                "Online subtitle search is not available in this build — " +
-                                "no subtitle provider is configured yet. " +
-                                "Load subtitles from a file in the player instead."
-                        },
-                        icon = Icons.Rounded.Search,
-                        text = "Search",
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    subtitleSearchResult?.let { result ->
-                        Text(
-                            text = result,
-                            color = TextSecondary,
-                            fontSize = 13.sp,
-                            modifier = Modifier.padding(top = 10.dp)
-                        )
-                    }
-                }
                 // Sync delay +/- 0.5s.
                 Row(
                     modifier = Modifier
