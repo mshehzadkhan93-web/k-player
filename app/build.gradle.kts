@@ -58,7 +58,10 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-ui:1.2.1")
-    implementation("androidx.media3:media3-ffmpeg-decoder:1.2.0")
+    // NOTE (v1.1): media3-ffmpeg-decoder is NOT published by Google (no AAR on
+    // Google Maven / Maven Central — source-only extension), so it is dropped
+    // for now. EXTENSION_RENDERER_MODE_PREFER stays on; DTS/TrueHD audio is a
+    // v1.2 follow-up (source-built FFmpeg extension).
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-video:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
