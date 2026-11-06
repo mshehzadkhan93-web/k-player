@@ -195,6 +195,38 @@ class SettingsStore(private val context: Context) {
     suspend fun saveResumePosition(mediaId: String, positionMs: Long) {
         context.resumeDataStore.edit { it[longPreferencesKey("pos_$mediaId")] = positionMs }
     }
+
+    /**
+     * Last-played timestamps, persisted in the SAME kplayer_resume store
+     * as the resume positions (keys "played_<mediaId>") so Recently
+     * Played survives app restarts. No second store is created.
+     */
+    val allLastPlayed: Flow<Map<String, Long>> =
+        context.resumeDataStore.data.map { prefs ->
+            prefs.asMap().entries.mapNotNull { (key, value) ->
+                val name = key.name
+                if (name.startsWith("played_") && value is Long) {
+                    name.removePrefix("played_") to value
+                } else null
+            }.toMap()
+        }
+
+    fun lastPlayedFlow(mediaId: String): Flow<Long> =
+        context.resumeDataStore.data.map { it[longPreferencesKey("played_$mediaId")] ?: 0L }
+
+    suspend fun saveLastPlayed(mediaId: String, timestampMs: Long) {
+        context.resumeDataStore.edit { it[longPreferencesKey("played_$mediaId")] = timestampMs }
+    }
+
+    /** Removes only the played_<id> keys (resume positions are untouched). */
+    suspend fun clearLastPlayed() {
+        context.resumeDataStore.edit { prefs ->
+            prefs.asMap().keys
+                .filter { it.name.startsWith("played_") }
+                .map { longPreferencesKey(it.name) }
+                .forEach { prefs.remove(it) }
+        }
+    }
 }
 
 private typealias MutablePreferences = androidx.datastore.preferences.core.MutablePreferences

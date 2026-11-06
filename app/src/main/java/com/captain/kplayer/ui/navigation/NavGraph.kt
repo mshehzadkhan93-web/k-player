@@ -1,9 +1,11 @@
 package com.captain.kplayer.ui.navigation
 
+import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import com.captain.kplayer.ui.screens.FolderDetailScreen
 import com.captain.kplayer.ui.screens.HomeScreen
 import com.captain.kplayer.ui.screens.MusicPlayerScreen
 import com.captain.kplayer.ui.screens.PlaylistScreen
@@ -21,6 +23,10 @@ object Routes {
     const val MUSIC = "music"
     const val PLAYLIST = "playlist"
     const val SETTINGS = "settings"
+    const val FOLDER = "folder/{encodedPath}"
+
+    /** Folder-detail route: the path is URL-encoded (it contains slashes). */
+    fun folderRoute(path: String): String = "folder/${Uri.encode(path)}"
 }
 
 @Composable
@@ -73,6 +79,16 @@ fun NavGraph(
                 settingsVm = settingsVm,
                 playerVm = playerVm,
                 libraryVm = libraryVm
+            )
+        }
+        composable(Routes.FOLDER) { backStackEntry ->
+            val encoded = backStackEntry.arguments?.getString("encodedPath").orEmpty()
+            val path = runCatching { Uri.decode(encoded) }.getOrDefault(encoded)
+            FolderDetailScreen(
+                folderPath = path,
+                navController = navController,
+                libraryVm = libraryVm,
+                playerVm = playerVm
             )
         }
     }

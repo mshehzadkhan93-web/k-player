@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
@@ -95,8 +96,26 @@ class PlayerViewModel(
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             if (::player.isInitialized) {
-                _currentIndex.value = player.currentMediaItemIndex
+                val index = player.currentMediaItemIndex
+                _currentIndex.value = index
+                // Bug 1: the top-bar title, duration and queue position all
+                // read from this entry, so every transition (next / prev /
+                // auto-advance) refreshes the whole player UI.
+                _currentEntry.value = _queue.value.getOrNull(index)
+                _positionMs.value = 0L
+                _durationMs.value = _queue.value.getOrNull(index)?.durationMs ?: 0L
+                _resumePrompt.value = null
+                softwareFallbackTried = false
+                seekWatchdogJob?.cancel()
             }
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            _isBuffering.value = playbackState == Player.STATE_BUFFERING
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            handlePlayerError(error)
         }
     }
 
@@ -120,6 +139,18 @@ class PlayerViewModel(
 
     private val _bufferedMs = MutableStateFlow(0L)
     val bufferedMs: StateFlow<Long> = _bufferedMs
+
+    /** True while the player is stalled waiting for data (shows a spinner). */
+    private val _isBuffering = MutableStateFlow(false)
+    val isBuffering: StateFlow<Boolean> = _isBuffering
+
+    /** Last user-facing playback error, if any. Cleared after it is shown. */
+    private val _playerError = MutableStateFlow<String?>(null)
+    val playerError: StateFlow<String?> = _playerError
+
+    fun clearPlayerError() {
+        _playerError.value = null
+    }
 
     val speedOptions = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
     private val _speed = MutableStateFlow(1.0f)
@@ -217,7 +248,7 @@ class PlayerViewModel(
         val prompt = _resumePrompt.value
         _resumePrompt.value = null
         if (resume && prompt != null && playerBuilt) {
-            player.seekTo(prompt.positionMs)
+            seekTo(prompt.positionMs)
         }
     }
 
@@ -256,6 +287,12 @@ class PlayerViewModel(
 
     private var sleepJob: Job? = null
     private var tickerJob: Job? = null
+    private var seekWatchdogJob: Job? = null
+    private var lastSeekRequestMs = 0L
+    private var lastSeekTargetMs = -1L
+    private var seekRetryCount = 0
+    /** True once the current item already fell back to software decoding. */
+    private var softwareFallbackTried = false
 
     init {
         refreshVolume()
@@ -355,6 +392,68 @@ class PlayerViewModel(
         }
     }
 
+    /**
+     * Bug 2: decoder failure (e.g. a codec the hardware decoder cannot
+     * handle) — rebuild once with software decoding. Any other failure
+     * surfaces a user-facing message instead of a stuck frame or a crash.
+     */
+    private fun handlePlayerError(error: PlaybackException) {
+        val isDecoderError = error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
+        if (isDecoderError && currentDecodingMode != "sw" && !softwareFallbackTried) {
+            softwareFallbackTried = true
+            _playerError.value = "Hardware decoder failed — retrying with software decoding…"
+            rebuildPlayer("sw")
+            return
+        }
+        _playerError.value = when (error.errorCode) {
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ->
+                "Could not load this video. Check the link or file and try again."
+            else -> "Playback error: ${error.message ?: "unknown error"}"
+        }
+    }
+
+    /** Bug 4: a stream URL must be a well-formed http(s) URL with a host. */
+    fun isValidStreamUrl(url: String): Boolean {
+        val trimmed = url.trim()
+        if (trimmed.isBlank()) return false
+        return try {
+            val uri = Uri.parse(trimmed)
+            (uri.scheme == "http" || uri.scheme == "https") && !uri.host.isNullOrBlank()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Bug 2: watches a seek — if the position has not settled near the
+     * target after 3s, re-seeks once; if it is still stuck, re-prepares
+     * the player instead of leaving the video frozen.
+     */
+    private fun armSeekWatchdog(target: Long) {
+        seekWatchdogJob?.cancel()
+        seekWatchdogJob = viewModelScope.launch {
+            delay(3000)
+            if (!playerBuilt || released) return@launch
+            if (kotlin.math.abs(player.currentPosition - target) > 500L) {
+                if (seekRetryCount < 1) {
+                    seekRetryCount++
+                    player.seekTo(target)
+                    delay(3000)
+                    if (!playerBuilt || released) return@launch
+                }
+                if (kotlin.math.abs(player.currentPosition - target) > 500L) {
+                    player.prepare()
+                }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // Starting playback
     // ------------------------------------------------------------------
@@ -380,8 +479,19 @@ class PlayerViewModel(
         startQueue(entries, index)
     }
 
-    fun playStream(stream: StreamItem) {
-        startQueue(listOf(stream.toQueueEntry()), 0)
+    /** Returns false (and surfaces an error) when the URL cannot be played. */
+    fun playStream(stream: StreamItem): Boolean {
+        if (!isValidStreamUrl(stream.url)) {
+            _playerError.value = "That stream URL doesn't look valid. Use a full http(s) link."
+            return false
+        }
+        return try {
+            startQueue(listOf(stream.toQueueEntry()), 0)
+            playerBuilt
+        } catch (e: Exception) {
+            _playerError.value = "Couldn't start this stream: ${e.message ?: "unknown error"}"
+            false
+        }
     }
 
     fun playQueueEntry(index: Int) {
@@ -394,13 +504,21 @@ class PlayerViewModel(
     }
 
     private fun startQueue(entries: List<QueueEntry>, startIndex: Int) {
+        if (!playerBuilt) {
+            _playerError.value = "Player is still starting — try again in a moment."
+            return
+        }
         _queue.value = entries
         _currentIndex.value = startIndex
         _currentEntry.value = entries.getOrNull(startIndex)
         val items = entries.map { PlayerFactory.mediaItem(it.url, it.title, it.subtitle) }
-        player.setMediaItems(items, startIndex, 0L)
-        player.prepare()
-        player.playWhenReady = true
+        try {
+            player.setMediaItems(items, startIndex, 0L)
+            player.prepare()
+            player.playWhenReady = true
+        } catch (e: Exception) {
+            _playerError.value = "Couldn't start playback: ${e.message ?: "unknown error"}"
+        }
     }
 
     // ------------------------------------------------------------------
@@ -428,12 +546,31 @@ class PlayerViewModel(
         }
     }
 
+    /**
+     * Bug 2: seeks on the player thread with a guard against repeated seeks
+     * to the same position, an optimistic UI update so scrubbing feels
+     * instant, and a watchdog that re-seeks once (then re-prepares) if the
+     * seek never lands.
+     */
     fun seekTo(positionMs: Long) {
-        if (playerBuilt) player.seekTo(positionMs.coerceIn(0L, _durationMs.value))
+        if (!playerBuilt) return
+        val target = if (_durationMs.value > 0) {
+            positionMs.coerceIn(0L, _durationMs.value)
+        } else {
+            positionMs.coerceAtLeast(0L)
+        }
+        val now = System.currentTimeMillis()
+        if (target == lastSeekTargetMs && now - lastSeekRequestMs < 150L) return
+        lastSeekTargetMs = target
+        lastSeekRequestMs = now
+        seekRetryCount = 0
+        player.seekTo(target)
+        _positionMs.value = target
+        armSeekWatchdog(target)
     }
 
     fun seekRelative(deltaMs: Long) {
-        if (playerBuilt) player.seekTo((player.currentPosition + deltaMs).coerceAtLeast(0L))
+        if (playerBuilt) seekTo(player.currentPosition + deltaMs)
     }
 
     fun playNext() {
@@ -584,16 +721,32 @@ class PlayerViewModel(
             player.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
     }
 
+    /**
+     * Bug 3: audio-track switching applies via the track selector without
+     * blocking the UI. If a track fails, fall back to automatic selection
+     * and surface an error instead of freezing on a stuck frame.
+     */
     fun selectAudioTrack(track: UiAudioTrack) {
         if (!playerBuilt) return
-        val group = player.currentTracks.groups.getOrNull(track.groupIndex) ?: return
-        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
-            .setOverrideForType(
-                TrackSelectionOverride(group.mediaTrackGroup, track.trackIndex)
-            )
-            .build()
-        _audioDisabled.value = false
+        try {
+            val group = player.currentTracks.groups.getOrNull(track.groupIndex) ?: return
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                .setOverrideForType(
+                    TrackSelectionOverride(group.mediaTrackGroup, track.trackIndex)
+                )
+                .build()
+            _audioDisabled.value = false
+        } catch (e: Exception) {
+            try {
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .clearOverrides()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                    .build()
+            } catch (_: Exception) {
+            }
+            _playerError.value = "Couldn't switch to that audio track — kept the current one."
+        }
     }
 
     fun disableAudio() {
@@ -606,14 +759,18 @@ class PlayerViewModel(
 
     fun selectSubtitleTrack(track: UiSubtitleTrack) {
         if (!playerBuilt) return
-        val group = player.currentTracks.groups.getOrNull(track.groupIndex) ?: return
-        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-            .setOverrideForType(
-                TrackSelectionOverride(group.mediaTrackGroup, track.trackIndex)
-            )
-            .build()
-        _subtitlesDisabled.value = false
+        try {
+            val group = player.currentTracks.groups.getOrNull(track.groupIndex) ?: return
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                .setOverrideForType(
+                    TrackSelectionOverride(group.mediaTrackGroup, track.trackIndex)
+                )
+                .build()
+            _subtitlesDisabled.value = false
+        } catch (_: Exception) {
+            _playerError.value = "Couldn't switch to that subtitle track."
+        }
     }
 
     fun disableSubtitles() {
@@ -863,6 +1020,7 @@ class PlayerViewModel(
         released = true
         tickerJob?.cancel()
         sleepJob?.cancel()
+        seekWatchdogJob?.cancel()
         saveCurrentResumePosition()
         _equalizerManager.value?.release()
         if (playerBuilt) {

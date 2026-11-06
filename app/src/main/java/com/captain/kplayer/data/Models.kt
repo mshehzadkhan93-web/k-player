@@ -34,7 +34,9 @@ data class VideoItem(
     /** File size in bytes (0 when unknown) — used by the Size sort order. */
     val sizeBytes: Long = 0L,
     /** Epoch millis the file was added — used by the Date sort order. */
-    val dateAddedMs: Long = 0L
+    val dateAddedMs: Long = 0L,
+    /** Epoch millis the video was last played (0 = never) — Recently Played. */
+    val lastPlayedMs: Long = 0L
 )
 
 data class TrackItem(

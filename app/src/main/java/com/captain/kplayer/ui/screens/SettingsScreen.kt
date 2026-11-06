@@ -3,6 +3,7 @@ package com.captain.kplayer.ui.screens
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -43,19 +44,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.navigation.NavHostController
 import com.captain.kplayer.ui.components.GlassButton
 import com.captain.kplayer.ui.components.GlassCard
-import com.captain.kplayer.ui.components.GlassDialog
 import com.captain.kplayer.ui.components.GlassTextField
 import com.captain.kplayer.ui.components.SectionHeader
 import com.captain.kplayer.ui.components.SettingRow
@@ -541,7 +544,7 @@ fun SettingsScreen(
             GroupCard("About") {
                 SettingRow(
                     title = "Version",
-                    subtitle = "K-Player 1.0",
+                    subtitle = "K-Player 1.1",
                     trailing = {}
                 )
                 ActionRow(
@@ -550,7 +553,7 @@ fun SettingsScreen(
                     onClick = {
                         Toast.makeText(
                             context,
-                            "You are on the latest version (1.0)",
+                            "You are on the latest version (1.1)",
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -587,70 +590,70 @@ fun SettingsScreen(
                     subtitle = "How K-Player handles your data",
                     onClick = { showPrivacy = true }
                 )
+                // About cards — inside the About group so they collapse with it.
+                SectionHeader("About K-Player")
+                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        Text(
+                            text = "K-Player",
+                            color = TextPrimary,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Version 1.1",
+                            color = TextSecondary,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                        Text(
+                            text = "A premium modern media player for videos and music, " +
+                                "with a glass design, hardware decoding, subtitles, " +
+                                "equalizer and network streaming.",
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(top = 10.dp)
+                        )
+                        Text(
+                            text = "• Plays videos and music from your device\n" +
+                                "• Hardware decoding (HW / HW+ / SW) up to 4K\n" +
+                                "• Subtitles in .srt, .vtt and .ass with sync and styling\n" +
+                                "• 5-band equalizer with bass boost\n" +
+                                "• Network streams (HTTP, HLS, DASH)\n" +
+                                "• Resume playback, playlists and sleep timer",
+                            color = TextSecondary,
+                            fontSize = 14.sp,
+                            lineHeight = 22.sp,
+                            modifier = Modifier.padding(top = 10.dp)
+                        )
+                    }
+                }
+                SectionHeader("About the Developer")
+                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        Text(
+                            text = "Developed by Shehzad Khan",
+                            color = TextPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Independent Android developer crafting premium, " +
+                                "beautiful apps.",
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                        Text(
+                            text = "Contact: —",
+                            color = TextSecondary,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
+                }
             }
 
-            // About cards.
-            SectionHeader("About K-Player")
-            GlassCard(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        text = "K-Player",
-                        color = TextPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Version 1.0",
-                        color = TextSecondary,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                    Text(
-                        text = "A premium modern media player for videos and music, " +
-                            "with a glass design, hardware decoding, subtitles, " +
-                            "equalizer and network streaming.",
-                        color = TextPrimary,
-                        fontSize = 14.sp,
-                        modifier = Modifier.padding(top = 10.dp)
-                    )
-                    Text(
-                        text = "• Plays videos and music from your device\n" +
-                            "• Hardware decoding (HW / HW+ / SW) up to 4K\n" +
-                            "• Subtitles in .srt, .vtt and .ass with sync and styling\n" +
-                            "• 5-band equalizer with bass boost\n" +
-                            "• Network streams (HTTP, HLS, DASH)\n" +
-                            "• Resume playback, playlists and sleep timer",
-                        color = TextSecondary,
-                        fontSize = 14.sp,
-                        lineHeight = 22.sp,
-                        modifier = Modifier.padding(top = 10.dp)
-                    )
-                }
-            }
-            SectionHeader("About the Developer")
-            GlassCard(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        text = "Developed by Shehzad Khan",
-                        color = TextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Independent Android developer crafting premium, " +
-                            "beautiful apps.",
-                        color = TextPrimary,
-                        fontSize = 14.sp,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                    Text(
-                        text = "Contact: —",
-                        color = TextSecondary,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                }
-            }
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
@@ -665,7 +668,7 @@ fun SettingsScreen(
             else -> "Clear recent streams?" to
                 "The recent streams list will be emptied."
         }
-        GlassDialog(onDismiss = { confirmClear = null }) {
+        OpaqueDialog(onDismiss = { confirmClear = null }) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Text(
                     text = title,
@@ -727,7 +730,7 @@ fun SettingsScreen(
 
     // Privacy policy dialog.
     if (showPrivacy) {
-        GlassDialog(onDismiss = { showPrivacy = false }) {
+        OpaqueDialog(onDismiss = { showPrivacy = false }) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Text(
                     text = "Privacy Policy",
@@ -757,13 +760,71 @@ fun SettingsScreen(
     }
 }
 
+/**
+ * Dialog with a fully opaque solid surface background (alpha 1.0).
+ * GlassDialog's frosted glass lets content bleed through from behind,
+ * so settings dialogs use this instead.
+ */
+@Composable
+private fun OpaqueDialog(
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        GlassCard(
+            modifier = Modifier.fillMaxWidth(),
+            opaque = true,
+            content = content
+        )
+    }
+}
+
+/**
+ * One collapsible settings group. Every group starts collapsed and each
+ * group remembers its own expanded state (keyed by section title) across
+ * recompositions and configuration changes, so groups expand and collapse
+ * independently. The header shows the title and a chevron that rotates
+ * when the group opens.
+ */
 @Composable
 private fun GroupCard(
     title: String,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    SectionHeader(text = title)
-    GlassCard(modifier = Modifier.fillMaxWidth(), content = content)
+    var expanded by rememberSaveable(title) { mutableStateOf(false) }
+    GlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                color = TextPrimary,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = Icons.Rounded.ChevronRight,
+                contentDescription = if (expanded) "Collapse $title" else "Expand $title",
+                tint = TextSecondary,
+                modifier = Modifier
+                    .size(24.dp)
+                    .rotate(if (expanded) 90f else 0f)
+            )
+        }
+        if (expanded) {
+            content()
+        }
+    }
+    Spacer(modifier = Modifier.height(12.dp))
 }
 
 @Composable

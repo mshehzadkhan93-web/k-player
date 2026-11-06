@@ -9,7 +9,10 @@ import android.graphics.Shader
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -18,7 +21,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import coil.decode.VideoFrameDecoder
 import coil.request.ImageRequest
+import com.captain.kplayer.data.VideoItem
 import com.captain.kplayer.ui.theme.CyanAccent
 import com.captain.kplayer.ui.theme.PinkAccent
 import com.captain.kplayer.ui.theme.VioletAccent
@@ -161,5 +166,45 @@ fun ArtImage(
         modifier = modifier
             .then(if (isVideo) Modifier.aspectRatio(16f / 9f) else Modifier)
             .clip(RoundedCornerShape(16.dp))
+    )
+}
+
+/**
+ * Real video thumbnail: extracts an actual frame from the video with
+ * Coil's [VideoFrameDecoder] (works for local content:// files from
+ * MediaStore and for remote URLs). The gradient [ArtImage] is used ONLY
+ * as a fallback when no frame can be extracted (unsupported file, missing
+ * file, decode error).
+ */
+@Composable
+fun RealThumbnail(
+    video: VideoItem,
+    modifier: Modifier = Modifier,
+    contentDescription: String? = null
+) {
+    var frameFailed by remember(video.id, video.url) { mutableStateOf(false) }
+    if (frameFailed) {
+        ArtImage(
+            key = video.thumbKey,
+            kind = ArtKind.VIDEO,
+            modifier = modifier,
+            contentDescription = contentDescription,
+            isVideo = true
+        )
+        return
+    }
+    val request = ImageRequest.Builder(LocalContext.current)
+        .data(video.url)
+        .decoderFactory(VideoFrameDecoder.Factory())
+        .crossfade(true)
+        .build()
+    AsyncImage(
+        model = request,
+        contentDescription = contentDescription,
+        contentScale = ContentScale.Crop,
+        modifier = modifier
+            .aspectRatio(16f / 9f)
+            .clip(RoundedCornerShape(16.dp)),
+        onError = { frameFailed = true }
     )
 }

@@ -13,8 +13,11 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -54,6 +57,7 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Subtitles
 import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -128,7 +132,11 @@ fun VideoPlayerScreen(
     val configuration = LocalConfiguration.current
 
     val entry by playerVm.currentEntry.collectAsState()
+    val currentIndex by playerVm.currentIndex.collectAsState()
+    val queue by playerVm.queue.collectAsState()
     val isPlaying by playerVm.isPlaying.collectAsState()
+    val isBuffering by playerVm.isBuffering.collectAsState()
+    val playerError by playerVm.playerError.collectAsState()
     val position by playerVm.positionMs.collectAsState()
     val duration by playerVm.durationMs.collectAsState()
     val speed by playerVm.speed.collectAsState()
@@ -166,6 +174,7 @@ fun VideoPlayerScreen(
     var showSpeedMenu by remember { mutableStateOf(false) }
     var overlay by remember { mutableStateOf<GestureOverlay?>(null) }
     var scrubFraction by remember { mutableStateOf<Float?>(null) }
+    var lastSliderSeekMs by remember { mutableStateOf(0L) }
 
     // Kids Lock: the player UI starts locked (long-press the lock to unlock).
     LaunchedEffect(kidsLock) {
@@ -220,6 +229,24 @@ fun VideoPlayerScreen(
         if (current is GestureOverlay.DoubleTap) {
             delay(800)
             if (overlay == current) overlay = null
+        }
+    }
+    // Bug 1: a new track resets any in-progress scrub, and stamps the
+    // video as played so it surfaces in Recently Played (next / prev /
+    // auto-advance all flow through the observed current entry).
+    LaunchedEffect(entry?.id) {
+        scrubFraction = null
+        overlay = null
+        val current = entry
+        if (current != null && current.isVideo) {
+            libraryVm.markVideoPlayed(current.id)
+        }
+    }
+    // Surface player errors as a toast instead of a stuck frame / crash.
+    LaunchedEffect(playerError) {
+        playerError?.let {
+            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+            playerVm.clearPlayerError()
         }
     }
 
@@ -304,6 +331,16 @@ fun VideoPlayerScreen(
             }
         }
 
+        // Buffering spinner: shows while the player waits for data.
+        if (isBuffering) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = Color.White)
+            }
+        }
+
         // Gesture layer: tap / double-tap / long-press / drag.
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val widthPx = constraints.maxWidth.toFloat()
@@ -348,6 +385,7 @@ fun VideoPlayerScreen(
                         var startPosition = 0L
                         var seekAccum = 0f
                         var seekPreview = 0L
+                        var lastLiveSeekMs = 0L
                         detectDragGestures(
                             onDragStart = {
                                 dragKind = 0
@@ -400,6 +438,15 @@ fun VideoPlayerScreen(
                                         seekPreview = (startPosition + deltaMs)
                                             .coerceIn(0L, total.coerceAtLeast(0L))
                                         overlay = GestureOverlay.Seek(seekPreview, total)
+                                        // Bug 6: smooth scrub — the video
+                                        // follows the finger (throttled live
+                                        // seeks); the final position settles
+                                        // on release.
+                                        val now = System.currentTimeMillis()
+                                        if (now - lastLiveSeekMs > 150L) {
+                                            lastLiveSeekMs = now
+                                            playerVm.seekTo(seekPreview)
+                                        }
                                     }
                                 }
                             }
@@ -514,6 +561,17 @@ fun VideoPlayerScreen(
                         maxLines = 1,
                         modifier = Modifier.weight(1f)
                     )
+                    // Queue position, refreshed from the observed entry on
+                    // every track change.
+                    if (queue.size > 1) {
+                        Text(
+                            text = "${currentIndex + 1} / ${queue.size}",
+                            color = Color.White.copy(alpha = 0.8f),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(end = 4.dp)
+                        )
+                    }
                     IconButton(onClick = { showAudioSheet = true }, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Rounded.Audiotrack, "Audio track", tint = Color.White)
                     }
@@ -539,42 +597,51 @@ fun VideoPlayerScreen(
                     }
                 }
 
-                // Center transport controls.
-                Row(
-                    modifier = Modifier.align(Alignment.Center),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(20.dp)
+                // Center transport controls: fade + slight scale (~300ms),
+                // never an abrupt appear/disappear.
+                AnimatedVisibility(
+                    visible = controlsVisible && !locked,
+                    enter = fadeIn(animationSpec = tween(300)) +
+                        scaleIn(initialScale = 0.92f, animationSpec = tween(300)),
+                    exit = fadeOut(animationSpec = tween(300)) +
+                        scaleOut(targetScale = 0.92f, animationSpec = tween(300)),
+                    modifier = Modifier.align(Alignment.Center)
                 ) {
-                    TextButton(
-                        label = "-${doubleTapStep}s",
-                        onClick = { playerVm.seekRelative(-doubleTapStep * 1000L) }
-                    )
-                    IconButton(onClick = { playerVm.playPrevious() }, modifier = Modifier.size(56.dp)) {
-                        Icon(Icons.Rounded.SkipPrevious, "Previous", tint = Color.White, modifier = Modifier.size(40.dp))
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(76.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.18f))
-                            .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape)
-                            .clickable { playerVm.togglePlay() },
-                        contentAlignment = Alignment.Center
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(20.dp)
                     ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = if (isPlaying) "Pause" else "Play",
-                            tint = Color.White,
-                            modifier = Modifier.size(40.dp)
+                        TextButton(
+                            label = "-${doubleTapStep}s",
+                            onClick = { playerVm.seekRelative(-doubleTapStep * 1000L) }
+                        )
+                        IconButton(onClick = { playerVm.playPrevious() }, modifier = Modifier.size(56.dp)) {
+                            Icon(Icons.Rounded.SkipPrevious, "Previous", tint = Color.White, modifier = Modifier.size(40.dp))
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(76.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.18f))
+                                .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape)
+                                .clickable { playerVm.togglePlay() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                tint = Color.White,
+                                modifier = Modifier.size(40.dp)
+                            )
+                        }
+                        IconButton(onClick = { playerVm.playNext() }, modifier = Modifier.size(56.dp)) {
+                            Icon(Icons.Rounded.SkipNext, "Next", tint = Color.White, modifier = Modifier.size(40.dp))
+                        }
+                        TextButton(
+                            label = "+${doubleTapStep}s",
+                            onClick = { playerVm.seekRelative(doubleTapStep * 1000L) }
                         )
                     }
-                    IconButton(onClick = { playerVm.playNext() }, modifier = Modifier.size(56.dp)) {
-                        Icon(Icons.Rounded.SkipNext, "Next", tint = Color.White, modifier = Modifier.size(40.dp))
-                    }
-                    TextButton(
-                        label = "+${doubleTapStep}s",
-                        onClick = { playerVm.seekRelative(doubleTapStep * 1000L) }
-                    )
                 }
 
                 // Bottom bar: seek + options.
@@ -596,12 +663,25 @@ fun VideoPlayerScreen(
                             value = scrubFraction ?: if (duration > 0) {
                                 position.toFloat() / duration.toFloat()
                             } else 0f,
-                            onValueChange = { scrubFraction = it },
+                            onValueChange = {
+                                scrubFraction = it
+                                // Bug 6: live time preview bubble + smooth
+                                // scrub — the video follows the thumb
+                                // (throttled live seeks), settling on release.
+                                val previewMs = (it * duration).toLong()
+                                overlay = GestureOverlay.Seek(previewMs, duration)
+                                val now = System.currentTimeMillis()
+                                if (now - lastSliderSeekMs > 150L) {
+                                    lastSliderSeekMs = now
+                                    playerVm.seekTo(previewMs)
+                                }
+                            },
                             onValueChangeFinished = {
                                 scrubFraction?.let {
                                     playerVm.seekTo((it * duration).toLong())
                                 }
                                 scrubFraction = null
+                                overlay = null
                             },
                             colors = SliderDefaults.colors(
                                 thumbColor = Color.White,
@@ -618,6 +698,27 @@ fun VideoPlayerScreen(
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
                         )
+                    }
+                    // Bug 8: MX Player style transport on the seek-bar row.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { playerVm.playPrevious() }, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Rounded.SkipPrevious, "Previous", tint = Color.White)
+                        }
+                        TextButton(
+                            label = "-${doubleTapStep}s",
+                            onClick = { playerVm.seekRelative(-doubleTapStep * 1000L) }
+                        )
+                        TextButton(
+                            label = "+${doubleTapStep}s",
+                            onClick = { playerVm.seekRelative(doubleTapStep * 1000L) }
+                        )
+                        IconButton(onClick = { playerVm.playNext() }, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Rounded.SkipNext, "Next", tint = Color.White)
+                        }
                     }
                     Row(
                         modifier = Modifier.fillMaxWidth(),

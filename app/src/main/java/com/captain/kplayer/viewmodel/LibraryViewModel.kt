@@ -33,6 +33,38 @@ class LibraryViewModel : ViewModel() {
     val usingDeviceMedia: StateFlow<Boolean> = _usingDeviceMedia
 
     /**
+     * The resume store (same kplayer_resume DataStore as the resume
+     * positions), attached once from Home so last-played stamps are
+     * persisted and reloaded across restarts.
+     */
+    private var settingsStore: SettingsStore? = null
+    private var lastPlayedById: Map<String, Long> = emptyMap()
+
+    /**
+     * Attaches the store and loads every saved played_<id> timestamp into
+     * the in-memory library. Idempotent — later calls are ignored.
+     */
+    fun attachStore(store: SettingsStore) {
+        if (settingsStore != null) return
+        settingsStore = store
+        viewModelScope.launch {
+            store.allLastPlayed.collect { played ->
+                applyLastPlayed(played)
+            }
+        }
+    }
+
+    /** Applies persisted timestamps to the videos currently in the library. */
+    private fun applyLastPlayed(played: Map<String, Long>) {
+        lastPlayedById = played
+        if (played.isEmpty()) return
+        allVideos.value = allVideos.value.map { video ->
+            val ts = played[video.id]
+            if (ts != null && ts > video.lastPlayedMs) video.copy(lastPlayedMs = ts) else video
+        }
+    }
+
+    /**
      * Scans the device with MediaStore. When real videos or songs are found
      * they replace the sample library; otherwise the samples stay as fallback.
      * Hidden (dot) files are skipped unless [showHiddenFiles] is on.
@@ -42,6 +74,9 @@ class LibraryViewModel : ViewModel() {
             val result = MediaStoreRepository.scan(context.applicationContext, showHiddenFiles)
             if (result.videos.isNotEmpty()) {
                 allVideos.value = result.videos
+                // A fresh scan replaces the list — re-apply the persisted
+                // last-played stamps so Recently Played survives the scan.
+                applyLastPlayed(lastPlayedById)
             }
             if (result.tracks.isNotEmpty()) {
                 allTracks.value = result.tracks
@@ -64,6 +99,21 @@ class LibraryViewModel : ViewModel() {
     val continueWatching: StateFlow<List<VideoItem>> =
         allVideos
             .map { videos -> videos.filter { it.resumeMs > 0 } }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * Recently Played: videos the user has played, most recently played
+     * first, max 10. A video counts as played when it has a last-played
+     * stamp ([markVideoPlayed]) or a saved resume position. The row needs
+     * title + last-played time, both on [VideoItem].
+     */
+    val recentlyPlayed: StateFlow<List<VideoItem>> =
+        allVideos
+            .map { videos ->
+                videos.filter { it.lastPlayedMs > 0L || it.resumeMs > 0L }
+                    .sortedByDescending { it.lastPlayedMs }
+                    .take(10)
+            }
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** Videos after search text, resolution filter and sort are applied. */
@@ -123,7 +173,12 @@ class LibraryViewModel : ViewModel() {
 
     /** Clears in-memory resume progress (watch history) for the session. */
     fun clearWatchHistory() {
-        allVideos.value = allVideos.value.map { it.copy(resumeMs = 0L) }
+        allVideos.value = allVideos.value.map {
+            it.copy(resumeMs = 0L, lastPlayedMs = 0L)
+        }
+        settingsStore?.let { store ->
+            viewModelScope.launch { store.clearLastPlayed() }
+        }
     }
 
     /** Empties the recent streams list. */
@@ -152,4 +207,33 @@ class LibraryViewModel : ViewModel() {
     }
 
     fun videoById(id: String): VideoItem? = allVideos.value.firstOrNull { it.id == id }
+
+    /**
+     * Records that a video was just played, stamping it with the current
+     * time so it surfaces in [recentlyPlayed]. Call when playback starts.
+     * Builds on the existing in-memory watch-history state (resumeMs);
+     * no second store is introduced.
+     */
+    fun markVideoPlayed(videoId: String) {
+        val now = System.currentTimeMillis()
+        allVideos.value = allVideos.value.map {
+            if (it.id == videoId) it.copy(lastPlayedMs = now) else it
+        }
+        // Persist the stamp in the same resume store so Recently Played
+        // survives app restarts.
+        settingsStore?.let { store ->
+            viewModelScope.launch { store.saveLastPlayed(videoId, now) }
+        }
+    }
+
+    /**
+     * Videos in one folder, for the folder-detail screen. [folderPath] is
+     * a [FolderItem.path] ("/storage/<bucket>") or a plain bucket name.
+     * Folders are grouped by the MediaStore bucket, which is carried on
+     * [VideoItem.genre] (see MediaStoreRepository).
+     */
+    fun videosInFolder(folderPath: String): List<VideoItem> {
+        val bucket = folderPath.substringAfterLast("/").ifBlank { folderPath }
+        return allVideos.value.filter { it.genre == bucket || it.genre == folderPath }
+    }
 }

@@ -3,6 +3,7 @@ package com.captain.kplayer.ui.screens
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -70,6 +71,7 @@ import com.captain.kplayer.ui.components.GlassCard
 import com.captain.kplayer.ui.components.GlassProgressBar
 import com.captain.kplayer.ui.components.GlassTextField
 import com.captain.kplayer.ui.components.HomeTab
+import com.captain.kplayer.ui.components.RealThumbnail
 import com.captain.kplayer.ui.navigation.Routes
 import com.captain.kplayer.ui.theme.GradientBackground
 import com.captain.kplayer.ui.theme.LocalAccent
@@ -132,6 +134,11 @@ fun HomeScreen(
     // persisted default view / sort order from Settings > Interface.
     LaunchedEffect(showHiddenFiles) {
         if (hasPermission) libraryVm.scanDeviceMedia(context, showHiddenFiles)
+    }
+    // Loads persisted last-played stamps so Recently Played survives
+    // restarts (idempotent; also persists future marks).
+    LaunchedEffect(Unit) {
+        libraryVm.attachStore(settingsVm.store)
     }
     LaunchedEffect(defaultView, defaultSort) {
         libraryVm.applyDefaults(defaultView, defaultSort)
@@ -217,7 +224,7 @@ fun HomeScreen(
                         playerVm = playerVm,
                         navController = navController
                     )
-                    HomeTab.FOLDERS -> FoldersTab(libraryVm = libraryVm)
+                    HomeTab.FOLDERS -> FoldersTab(libraryVm = libraryVm, navController = navController)
                     HomeTab.NETWORK -> NetworkTab(
                         libraryVm = libraryVm,
                         playerVm = playerVm,
@@ -267,12 +274,32 @@ private fun VideosTab(
 ) {
     val videos by libraryVm.visibleVideos.collectAsState()
     val continueWatching by libraryVm.continueWatching.collectAsState()
+    val recentlyPlayed by libraryVm.recentlyPlayed.collectAsState()
     val sortMode by libraryVm.sortMode.collectAsState()
     val viewMode by libraryVm.viewMode.collectAsState()
     val filter by libraryVm.resolutionFilter.collectAsState()
     var showSortMenu by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        // Part D: Recently Played, above Continue Watching.
+        if (recentlyPlayed.isNotEmpty()) {
+            Text(
+                text = "Recently Played",
+                color = TextPrimary,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(recentlyPlayed, key = { it.id }) { video ->
+                    RecentCard(video) {
+                        playerVm.playVideo(video, videos)
+                        navController.navigate(Routes.PLAYER)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(18.dp))
+        }
         if (continueWatching.isNotEmpty()) {
             Text(
                 text = "Continue Watching",
@@ -425,10 +452,8 @@ private fun VideosTab(
 private fun VideoCard(video: VideoItem, onClick: () -> Unit) {
     GlassCard(modifier = Modifier.fillMaxWidth(), onClick = onClick) {
         Box {
-            ArtImage(
-                key = video.thumbKey,
-                kind = ArtKind.VIDEO,
-                isVideo = true,
+            RealThumbnail(
+                video = video,
                 modifier = Modifier.fillMaxWidth()
             )
             Badge(
@@ -473,10 +498,8 @@ private fun VideoRow(video: VideoItem, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(modifier = Modifier.width(128.dp)) {
-                ArtImage(
-                    key = video.thumbKey,
-                    kind = ArtKind.VIDEO,
-                    isVideo = true,
+                RealThumbnail(
+                    video = video,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Badge(
@@ -519,10 +542,8 @@ private fun VideoRow(video: VideoItem, onClick: () -> Unit) {
 private fun ContinueCard(video: VideoItem, onClick: () -> Unit) {
     GlassCard(modifier = Modifier.width(220.dp), onClick = onClick) {
         Box {
-            ArtImage(
-                key = video.thumbKey,
-                kind = ArtKind.VIDEO,
-                isVideo = true,
+            RealThumbnail(
+                video = video,
                 modifier = Modifier.fillMaxWidth()
             )
             Badge(
@@ -548,6 +569,53 @@ private fun ContinueCard(video: VideoItem, onClick: () -> Unit) {
                 fontSize = 11.sp
             )
         }
+    }
+}
+
+@Composable
+private fun RecentCard(video: VideoItem, onClick: () -> Unit) {
+    GlassCard(modifier = Modifier.width(220.dp), onClick = onClick) {
+        Box {
+            RealThumbnail(
+                video = video,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Badge(
+                text = formatDuration(video.durationMs),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+            )
+        }
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = video.title,
+                color = TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Played ${formatLastPlayed(video.lastPlayedMs)}",
+                color = TextSecondary,
+                fontSize = 12.sp
+            )
+        }
+    }
+}
+
+/** Relative last-played label ("Just now", "5 min ago", "3h ago", "Yesterday", "4d ago"). */
+private fun formatLastPlayed(lastPlayedMs: Long): String {
+    if (lastPlayedMs <= 0L) return "Not played yet"
+    val diff = System.currentTimeMillis() - lastPlayedMs
+    if (diff < 0L) return "Just now"
+    val minutes = diff / 60_000L
+    return when {
+        minutes < 1 -> "Just now"
+        minutes < 60 -> "$minutes min ago"
+        minutes < 60 * 24 -> "${minutes / 60}h ago"
+        minutes < 60 * 24 * 2 -> "Yesterday"
+        else -> "${minutes / (60 * 24)}d ago"
     }
 }
 
@@ -681,14 +749,17 @@ private fun MiniPlayer(
 }
 
 @Composable
-private fun FoldersTab(libraryVm: LibraryViewModel) {
+private fun FoldersTab(libraryVm: LibraryViewModel, navController: NavHostController) {
     val folders by libraryVm.folders.collectAsState()
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(vertical = 4.dp)
     ) {
         items(folders, key = { it.name }) { folder ->
-            GlassCard(modifier = Modifier.fillMaxWidth()) {
+            GlassCard(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = { navController.navigate(Routes.folderRoute(folder.path)) }
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -738,6 +809,7 @@ private fun NetworkTab(
     playerVm: PlayerViewModel,
     navController: NavHostController
 ) {
+    val context = LocalContext.current
     var url by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     val streams by libraryVm.streams.collectAsState()
@@ -768,14 +840,30 @@ private fun NetworkTab(
             icon = Icons.Rounded.PlayArrow,
             modifier = Modifier.fillMaxWidth(),
             onClick = {
+                // Bug 4: never crash on a bad URL — validate first, then
+                // start playback inside try/catch and surface the error.
                 val trimmed = url.trim()
-                if (libraryVm.addStream(trimmed)) {
-                    playerVm.playStream(
-                        StreamItem(trimmed, trimmed.substringAfterLast("/").ifBlank { "Stream" }, "Just now")
-                    )
-                    navController.navigate(Routes.PLAYER)
-                } else {
+                if (!playerVm.isValidStreamUrl(trimmed)) {
                     error = "Enter a valid http(s) URL."
+                } else {
+                    try {
+                        if (libraryVm.addStream(trimmed)) {
+                            val stream = StreamItem(
+                                trimmed,
+                                trimmed.substringAfterLast("/").ifBlank { "Stream" },
+                                "Just now"
+                            )
+                            if (playerVm.playStream(stream)) {
+                                navController.navigate(Routes.PLAYER)
+                            } else {
+                                error = "Couldn't start that stream."
+                            }
+                        } else {
+                            error = "Enter a valid http(s) URL."
+                        }
+                    } catch (e: Exception) {
+                        error = "Couldn't start that stream."
+                    }
                 }
             }
         )
@@ -800,8 +888,26 @@ private fun NetworkTab(
                 GlassCard(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = {
-                        playerVm.playStream(stream)
-                        navController.navigate(Routes.PLAYER)
+                        // Bug 4: a stale/broken recent stream must never crash.
+                        try {
+                            if (playerVm.isValidStreamUrl(stream.url) &&
+                                playerVm.playStream(stream)
+                            ) {
+                                navController.navigate(Routes.PLAYER)
+                            } else {
+                                Toast.makeText(
+                                    context,
+                                    "That stream link is no longer valid.",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(
+                                context,
+                                "Couldn't start that stream.",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
                     }
                 ) {
                     Row(

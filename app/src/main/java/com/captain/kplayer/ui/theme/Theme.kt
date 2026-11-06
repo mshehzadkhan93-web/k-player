@@ -20,12 +20,16 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
-private val KPlayerColorScheme = darkColorScheme(
-    primary = CyanAccent,
-    secondary = PinkAccent,
-    tertiary = VioletAccent,
-    background = MidnightBlue,
-    surface = Color(0xFF151B3D),
+/**
+ * Dark Material 3 scheme built from the selected theme, so primary,
+ * secondary and tertiary always follow the theme's accent colors.
+ */
+private fun kPlayerColorScheme(theme: ThemeDefinition) = darkColorScheme(
+    primary = theme.accent.start,
+    secondary = theme.accent.end,
+    tertiary = theme.accent.glowColor,
+    background = theme.background.top,
+    surface = theme.background.top,
     surfaceVariant = Color(0xFF1E2547),
     onPrimary = Color.Black,
     onSecondary = Color.Black,
@@ -52,24 +56,20 @@ private val KPlayerTypography = Typography(
 
 /**
  * App theme: dark Material 3 scheme plus the K-Player design tokens.
- * [themeName] picks one of the five themes (Nebula, Emerald, Sunset,
- * Crimson, Ocean); the whole app re-themes the moment it changes.
+ * [themeName] picks one of the eight themes (Nebula, Emerald, Sunset,
+ * Crimson, Ocean, Aurora, Golden Hour, Cyberpunk); the whole app
+ * re-themes the moment it changes.
  */
 @Composable
 fun KPlayerTheme(
     themeName: String = "nebula",
-    blurIntensity: Float = 0.6f,
+    blurIntensity: Float = 0.12f,
     content: @Composable () -> Unit
 ) {
     val theme = themeDefinitionFor(themeName)
     val accent = theme.accent
     val background = theme.background
-    val scheme = KPlayerColorScheme.copy(
-        primary = accent.start,
-        secondary = accent.end,
-        background = background.top,
-        surface = background.top
-    )
+    val scheme = kPlayerColorScheme(theme)
     CompositionLocalProvider(
         LocalAccent provides accent,
         LocalBackground provides background,
@@ -114,6 +114,15 @@ fun GradientBackground(content: @Composable BoxScope.() -> Unit) {
                 .blur(90.dp)
                 .background(accent.end.copy(alpha = 0.13f), CircleShape)
         )
+        if (accent.hasGlow) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxSize(0.45f)
+                    .blur(90.dp)
+                    .background(accent.glowColor.copy(alpha = 0.12f), CircleShape)
+            )
+        }
         content()
     }
 }

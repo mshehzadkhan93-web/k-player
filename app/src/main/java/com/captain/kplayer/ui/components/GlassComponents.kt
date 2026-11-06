@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -57,7 +58,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import com.captain.kplayer.ui.theme.CyanAccent
 import com.captain.kplayer.ui.theme.LocalAccent
 import com.captain.kplayer.ui.theme.LocalGlassAlpha
 import com.captain.kplayer.ui.theme.TextMuted
@@ -67,33 +67,71 @@ import com.captain.kplayer.ui.theme.TextSecondary
 /** Bottom navigation tabs on the Home screen. */
 enum class HomeTab { VIDEOS, MUSIC, FOLDERS, NETWORK, SETTINGS }
 
+/**
+ * Clear-glass fill: low white alpha (about 8-12% at the default glass
+ * setting) so content stays visible through the panel — no heavy frost.
+ * The fill strength still follows the glass intensity from Settings >
+ * Appearance, scaled down to the clear-glass range.
+ */
 private fun glassBrush(alpha: Float): Brush {
     return Brush.verticalGradient(
         listOf(
-            Color.White.copy(alpha = 0.07f + alpha * 0.11f),
-            Color.White.copy(alpha = 0.02f + alpha * 0.05f)
+            Color.White.copy(alpha = 0.08f + alpha * 0.06f),
+            Color.White.copy(alpha = 0.02f + alpha * 0.03f)
         )
     )
 }
 
 /**
- * Frosted translucent panel: white gradient fill, 1dp soft white border,
- * rounded corners and a soft shadow. The fill strength follows the glass
- * blur intensity from Settings > Appearance.
+ * Clear-glass edge: a thin bright white border (~45% white) plus a
+ * subtle top-light inner glow that fades toward the bottom edge.
+ */
+private fun Modifier.glassEdge(shape: RoundedCornerShape): Modifier {
+    return this
+        .border(1.dp, Color.White.copy(alpha = 0.45f), shape)
+        .border(
+            1.dp,
+            Brush.verticalGradient(
+                listOf(
+                    Color.White.copy(alpha = 0.20f),
+                    Color.White.copy(alpha = 0.02f)
+                )
+            ),
+            shape
+        )
+}
+
+/**
+ * Clear-glass panel: low-alpha white fill, thin bright white border
+ * with a subtle inner glow, rounded corners and a soft shadow. Content
+ * behind the panel stays faintly visible through it. The fill strength
+ * follows the glass intensity from Settings > Appearance.
+ * [opaque] renders a solid surface instead (used by sheets and dialogs
+ * so nothing bleeds through from behind).
  */
 @Composable
 fun GlassCard(
     modifier: Modifier = Modifier,
     radius: Dp = 24.dp,
     onClick: (() -> Unit)? = null,
+    opaque: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val alpha = LocalGlassAlpha.current
     val shape = RoundedCornerShape(radius)
     var cardModifier = modifier
         .shadow(10.dp, shape, ambientColor = Color.Black.copy(alpha = 0.35f))
-        .background(glassBrush(alpha), shape)
-        .border(1.dp, Color.White.copy(alpha = 0.22f), shape)
+        .then(
+            if (opaque) {
+                Modifier
+                    .background(MaterialTheme.colorScheme.surface, shape)
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), shape)
+            } else {
+                Modifier
+                    .background(glassBrush(alpha), shape)
+                    .glassEdge(shape)
+            }
+        )
         .clip(shape)
     if (onClick != null) {
         cardModifier = cardModifier.clickable(onClick = onClick)
@@ -122,7 +160,7 @@ fun GlassButton(
             .height(48.dp)
             .shadow(6.dp, RoundedCornerShape(24.dp), ambientColor = Color.Black.copy(alpha = 0.3f))
             .background(glassBrush(alpha), RoundedCornerShape(24.dp))
-            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(24.dp))
+            .glassEdge(RoundedCornerShape(24.dp))
             .clip(RoundedCornerShape(24.dp))
             .clickable(
                 interactionSource = interactionSource,
@@ -212,13 +250,18 @@ fun Badge(
     modifier: Modifier = Modifier
 ) {
     val accent = LocalAccent.current
+    val shape = RoundedCornerShape(8.dp)
+    var badgeModifier = modifier
+        .background(
+            if (gradient) accent.brush
+            else SolidColor(Color.White.copy(alpha = 0.10f)),
+            shape
+        )
+    if (!gradient) {
+        badgeModifier = badgeModifier.border(1.dp, Color.White.copy(alpha = 0.35f), shape)
+    }
     Box(
-        modifier = modifier
-            .background(
-                if (gradient) accent.brush
-                else SolidColor(Color.Black.copy(alpha = 0.55f)),
-                RoundedCornerShape(8.dp)
-            )
+        modifier = badgeModifier
             .padding(horizontal = 7.dp, vertical = 3.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -242,7 +285,7 @@ fun GlassProgressBar(
         modifier = modifier
             .height(4.dp)
             .clip(RoundedCornerShape(2.dp))
-            .background(Color.White.copy(alpha = 0.18f))
+            .background(Color.White.copy(alpha = 0.10f))
     ) {
         Box(
             modifier = Modifier
@@ -267,7 +310,7 @@ fun GlassSeekBar(
         colors = SliderDefaults.colors(
             thumbColor = Color.White,
             activeTrackColor = accent.start,
-            inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+            inactiveTrackColor = Color.White.copy(alpha = 0.12f)
         ),
         modifier = modifier.height(48.dp)
     )
@@ -283,6 +326,7 @@ fun GlassTextField(
     leadingIcon: @Composable (() -> Unit)? = null,
     singleLine: Boolean = true
 ) {
+    val accent = LocalAccent.current
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -291,19 +335,19 @@ fun GlassTextField(
         singleLine = singleLine,
         shape = RoundedCornerShape(24.dp),
         colors = OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = Color.White.copy(alpha = 0.08f),
-            unfocusedContainerColor = Color.White.copy(alpha = 0.05f),
-            focusedBorderColor = Color.White.copy(alpha = 0.35f),
-            unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
+            focusedContainerColor = Color.White.copy(alpha = 0.10f),
+            unfocusedContainerColor = Color.White.copy(alpha = 0.06f),
+            focusedBorderColor = Color.White.copy(alpha = 0.50f),
+            unfocusedBorderColor = Color.White.copy(alpha = 0.40f),
             focusedTextColor = TextPrimary,
             unfocusedTextColor = TextPrimary,
-            cursorColor = CyanAccent
+            cursorColor = accent.start
         ),
         modifier = modifier.height(56.dp)
     )
 }
 
-/** Frosted bottom navigation bar with five tabs. */
+/** Clear-glass bottom navigation bar with five tabs. Semi-transparent so the list scrolling underneath stays faintly visible through it. */
 @Composable
 fun GlassBottomBar(
     selected: HomeTab,
@@ -329,9 +373,9 @@ fun GlassBottomBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(12.dp, RoundedCornerShape(24.dp), ambientColor = Color.Black.copy(alpha = 0.4f))
+            .shadow(8.dp, RoundedCornerShape(24.dp), ambientColor = Color.Black.copy(alpha = 0.25f))
             .background(glassBrush(alpha), RoundedCornerShape(24.dp))
-            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(24.dp))
+            .glassEdge(RoundedCornerShape(24.dp))
             .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
@@ -372,7 +416,7 @@ fun GlassBottomBar(
     }
 }
 
-/** Bottom sheet with a frosted glass card inside a transparent container. */
+/** Bottom sheet with a solid opaque surface — content behind it must never show through. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GlassBottomSheet(
@@ -383,7 +427,7 @@ fun GlassBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color.Transparent,
+        containerColor = MaterialTheme.colorScheme.surface,
         dragHandle = {
             BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.4f))
         }
@@ -393,12 +437,13 @@ fun GlassBottomSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp)
                 .padding(bottom = 20.dp),
+            opaque = true,
             content = content
         )
     }
 }
 
-/** Dialog with a frosted glass card. */
+/** Dialog with a solid opaque surface — content behind it must never show through. */
 @Composable
 fun GlassDialog(
     onDismiss: () -> Unit,
@@ -407,6 +452,7 @@ fun GlassDialog(
     Dialog(onDismissRequest = onDismiss) {
         GlassCard(
             modifier = Modifier.fillMaxWidth(),
+            opaque = true,
             content = content
         )
     }
