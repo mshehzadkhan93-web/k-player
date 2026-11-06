@@ -1,0 +1,165 @@
+package com.captain.kplayer.ui.components
+
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.LinearGradient
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Shader
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.captain.kplayer.ui.theme.CyanAccent
+import com.captain.kplayer.ui.theme.PinkAccent
+import com.captain.kplayer.ui.theme.VioletAccent
+
+enum class ArtKind { VIDEO, MUSIC, FOLDER, STREAM }
+
+private val PALETTES = listOf(
+    Pair(Color(0xFF0EA5E9), Color(0xFF7C3AED)),
+    Pair(Color(0xFFEC4899), Color(0xFFF97316)),
+    Pair(Color(0xFF22D3EE), Color(0xFF3B82F6)),
+    Pair(Color(0xFFA855F7), Color(0xFFEC4899)),
+    Pair(Color(0xFF10B981), Color(0xFF0EA5E9)),
+    Pair(Color(0xFFF59E0B), Color(0xFFEF4444)),
+    Pair(Color(0xFF6366F1), Color(0xFF22D3EE)),
+    Pair(Color(0xFF14B8A6), Color(0xFF84CC16))
+)
+
+private object ArtCache {
+    private val cache = LinkedHashMap<String, Bitmap>(64, 0.75f, true)
+    fun get(key: String): Bitmap? = synchronized(this) { cache[key] }
+    fun put(key: String, bitmap: Bitmap) = synchronized(this) {
+        if (cache.size > 64) {
+            val oldest = cache.keys.firstOrNull()
+            if (oldest != null) cache.remove(oldest)
+        }
+        cache[key] = bitmap
+    }
+}
+
+private fun drawArtBitmap(key: String, kind: ArtKind, size: Int): Bitmap {
+    val palette = PALETTES[(key.hashCode().and(Int.MAX_VALUE)) % PALETTES.size]
+    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val gradient = LinearGradient(
+        0f, 0f, size.toFloat(), size.toFloat(),
+        palette.first.toArgb(), palette.second.toArgb(), Shader.TileMode.CLAMP
+    )
+    val bgPaint = Paint().apply { shader = gradient }
+    canvas.drawRect(0f, 0f, size.toFloat(), size.toFloat(), bgPaint)
+
+    // Soft diagonal sheen.
+    val sheenPaint = Paint().apply {
+        color = android.graphics.Color.WHITE
+        alpha = 18
+    }
+    val sheen = Path().apply {
+        moveTo(0f, size.toFloat())
+        lineTo(size * 0.55f, 0f)
+        lineTo(size.toFloat(), 0f)
+        lineTo(size.toFloat(), size * 0.45f)
+        close()
+    }
+    canvas.drawPath(sheen, sheenPaint)
+
+    val glyphPaint = Paint().apply {
+        color = android.graphics.Color.WHITE
+        alpha = 235
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+    val center = size / 2f
+    when (kind) {
+        ArtKind.VIDEO -> {
+            val triangle = Path().apply {
+                val w = size * 0.30f
+                val h = size * 0.36f
+                moveTo(center - w * 0.4f, center - h / 2)
+                lineTo(center + w * 0.6f, center)
+                lineTo(center - w * 0.4f, center + h / 2)
+                close()
+            }
+            canvas.drawPath(triangle, glyphPaint)
+        }
+        ArtKind.MUSIC -> {
+            glyphPaint.textSize = size * 0.5f
+            glyphPaint.textAlign = Paint.Align.CENTER
+            val metrics = glyphPaint.fontMetrics
+            val y = center - (metrics.ascent + metrics.descent) / 2
+            canvas.drawText("\u266A", center, y, glyphPaint)
+        }
+        ArtKind.FOLDER -> {
+            val folder = Path().apply {
+                val left = size * 0.24f
+                val top = size * 0.30f
+                val right = size * 0.76f
+                val bottom = size * 0.70f
+                moveTo(left, top + size * 0.08f)
+                lineTo(left + size * 0.18f, top)
+                lineTo(left + size * 0.32f, top)
+                lineTo(left + size * 0.36f, top + size * 0.08f)
+                lineTo(right, top + size * 0.08f)
+                lineTo(right, bottom)
+                lineTo(left, bottom)
+                close()
+            }
+            canvas.drawPath(folder, glyphPaint)
+        }
+        ArtKind.STREAM -> {
+            glyphPaint.style = Paint.Style.STROKE
+            glyphPaint.strokeWidth = size * 0.045f
+            glyphPaint.strokeCap = Paint.Cap.ROUND
+            canvas.drawCircle(center, center, size * 0.09f, glyphPaint.apply { style = Paint.Style.FILL })
+            glyphPaint.style = Paint.Style.STROKE
+            canvas.drawArc(center - size * 0.20f, center - size * 0.20f, center + size * 0.20f, center + size * 0.20f, -55f, 110f, false, glyphPaint)
+            canvas.drawArc(center - size * 0.32f, center - size * 0.32f, center + size * 0.32f, center + size * 0.32f, -55f, 110f, false, glyphPaint)
+        }
+    }
+    return bitmap
+}
+
+/** Returns a cached gradient placeholder bitmap for a library item. */
+fun artBitmap(key: String, kind: ArtKind, size: Int = 512): Bitmap {
+    val cacheKey = "$kind:$key:$size"
+    return ArtCache.get(cacheKey) ?: drawArtBitmap(key, kind, size).also {
+        ArtCache.put(cacheKey, it)
+    }
+}
+
+/**
+ * Thumbnail image drawn entirely in code (gradient + icon glyph) and loaded
+ * through Coil, so no network images are ever required.
+ */
+@Composable
+fun ArtImage(
+    key: String,
+    kind: ArtKind,
+    modifier: Modifier = Modifier,
+    contentDescription: String? = null,
+    isVideo: Boolean = false
+) {
+    val bitmap = remember(key, kind) { artBitmap(key, kind) }
+    val request = ImageRequest.Builder(LocalContext.current)
+        .data(bitmap)
+        .crossfade(true)
+        .build()
+    AsyncImage(
+        model = request,
+        contentDescription = contentDescription,
+        contentScale = ContentScale.Crop,
+        modifier = modifier
+            .then(if (isVideo) Modifier.aspectRatio(16f / 9f) else Modifier)
+            .clip(RoundedCornerShape(16.dp))
+    )
+}
