@@ -136,8 +136,6 @@ object MediaStoreRepository {
                     val path = it.getString(dataCol) ?: ""
                     if (path.contains("/.")) continue
                 }
-                val duration = it.getLong(durationCol)
-                if (duration <= 0L) continue
                 val uri = ContentUris.withAppendedId(
                     MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id
                 ).toString()

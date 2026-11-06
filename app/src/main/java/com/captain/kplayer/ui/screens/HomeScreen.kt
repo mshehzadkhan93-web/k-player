@@ -5,6 +5,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +30,7 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SkipNext
@@ -205,6 +208,7 @@ fun HomeScreen(
                     HomeTab.VIDEOS -> VideosTab(
                         libraryVm = libraryVm,
                         playerVm = playerVm,
+                        settingsVm = settingsVm,
                         navController = navController,
                         showSampleHint = !usingDeviceMedia
                     )
@@ -257,6 +261,7 @@ fun HomeScreen(
 private fun VideosTab(
     libraryVm: LibraryViewModel,
     playerVm: PlayerViewModel,
+    settingsVm: SettingsViewModel,
     navController: NavHostController,
     showSampleHint: Boolean
 ) {
@@ -299,10 +304,8 @@ private fun VideosTab(
                 Box(
                     modifier = Modifier
                         .padding(end = 4.dp)
+                        .clickable { libraryVm.setResolutionFilter(label) }
                 ) {
-                    androidx.compose.foundation.clickable {
-                        libraryVm.setResolutionFilter(label)
-                    }
                     Text(
                         text = label,
                         color = if (selected) LocalAccent.current.start else TextMuted,
@@ -654,7 +657,7 @@ private fun MiniPlayer(
             ) {
                 Icon(
                     imageVector = if (isPlaying) {
-                        androidx.compose.material.icons.Icons.Rounded.Pause
+                        Icons.Rounded.Pause
                     } else {
                         Icons.Rounded.PlayArrow
                     },

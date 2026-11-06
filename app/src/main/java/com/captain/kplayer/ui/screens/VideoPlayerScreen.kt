@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -113,6 +114,7 @@ private sealed interface GestureOverlay {
  * background play, picture-in-picture, audio/subtitle sheets, equalizer,
  * playlist and video info.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun VideoPlayerScreen(
     navController: NavHostController,

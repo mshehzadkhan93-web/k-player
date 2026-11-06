@@ -25,6 +25,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
@@ -43,6 +49,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -209,7 +216,7 @@ fun Badge(
         modifier = modifier
             .background(
                 if (gradient) accent.brush
-                else Color.Black.copy(alpha = 0.55f),
+                else SolidColor(Color.Black.copy(alpha = 0.55f)),
                 RoundedCornerShape(8.dp)
             )
             .padding(horizontal = 7.dp, vertical = 3.dp),
@@ -312,11 +319,11 @@ fun GlassBottomBar(
         HomeTab.SETTINGS to "Settings"
     )
     val icons = mapOf(
-        HomeTab.VIDEOS to androidx.compose.material.icons.Icons.Rounded.Movie,
-        HomeTab.MUSIC to androidx.compose.material.icons.Icons.Rounded.MusicNote,
-        HomeTab.FOLDERS to androidx.compose.material.icons.Icons.Rounded.Folder,
-        HomeTab.NETWORK to androidx.compose.material.icons.Icons.Rounded.Public,
-        HomeTab.SETTINGS to androidx.compose.material.icons.Icons.Rounded.Settings
+        HomeTab.VIDEOS to Icons.Rounded.Movie,
+        HomeTab.MUSIC to Icons.Rounded.MusicNote,
+        HomeTab.FOLDERS to Icons.Rounded.Folder,
+        HomeTab.NETWORK to Icons.Rounded.Public,
+        HomeTab.SETTINGS to Icons.Filled.Settings
     )
     val alpha = LocalGlassAlpha.current
     Row(
