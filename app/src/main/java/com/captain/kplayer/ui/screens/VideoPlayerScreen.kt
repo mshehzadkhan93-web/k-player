@@ -50,7 +50,7 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.Play
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
@@ -1128,7 +1128,7 @@ fun VideoPlayerScreen(
                             )
                             GlassPillButton(
                                 modifier = Modifier.weight(1f),
-                                icon = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.Play,
+                                icon = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                 onClick = { playerVm.togglePlay() }
                             )
                             GlassPillButton(

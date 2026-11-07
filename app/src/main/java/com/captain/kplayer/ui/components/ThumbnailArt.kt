@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.decode.VideoFrameDecoder
 import coil.request.ImageRequest
+import coil.request.Parameters
 import com.captain.kplayer.data.VideoItem
 import com.captain.kplayer.ui.theme.CyanAccent
 import com.captain.kplayer.ui.theme.PinkAccent
@@ -213,7 +214,11 @@ fun RealThumbnail(
             .data(video.url)
             .decoderFactory(VideoFrameDecoder.Factory())
             .size(widthPx, heightPx)
-            .parameter(VideoFrameDecoder.VIDEO_FRAME_MICROS_KEY, 1_000_000L)
+            .parameters(
+                Parameters.Builder()
+                    .set(VideoFrameDecoder.VIDEO_FRAME_MICROS_KEY, 1_000_000L)
+                    .build()
+            )
             .crossfade(true)
             .build()
     }
