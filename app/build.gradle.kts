@@ -5,11 +5,6 @@ plugins {
 
 // The FFmpeg extension AAR is built from source in CI
 // (.github/workflows/build-apk.yml) and placed in app/libs/.
-repositories {
-    flatDir {
-        dirs("libs")
-    }
-}
 
 android {
     namespace = "com.captain.kplayer"
@@ -69,9 +64,10 @@ dependencies {
     // FFmpeg audio extension (DTS / DTS-HD / TrueHD / AC3 / E-AC3): Google does
     // NOT publish media3-ffmpeg-decoder as an AAR (source-only extension), so
     // CI builds it from source (androidx/media tag 1.2.1, FFmpeg 6.0) and drops
-    // the AAR into app/libs/ — see .github/workflows/build-apk.yml. flatDir
-    // AARs carry no transitive deps, so media3-decoder is declared explicitly.
-    implementation(name = "lib-decoder-ffmpeg-release", ext = "aar")
+    // the AAR into app/libs/ — see .github/workflows/build-apk.yml. A file
+    // dependency carries no transitive deps, so media3-decoder is declared
+    // explicitly below.
+    implementation(files("libs/lib-decoder-ffmpeg-release.aar"))
     implementation("androidx.media3:media3-decoder:1.2.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-video:2.7.0")
