@@ -438,14 +438,18 @@ fun VideoPlayerScreen(
                                     }
                                     continue
                                 }
+                                // Finger lifted or gesture cancelled:
+                                // PointerEvent.type (not PointerInputChange
+                                // .type, which is the input-device kind)
+                                // reports Release / Cancel for the event.
+                                if (event.type == PointerEventType.Release ||
+                                    event.type == PointerEventType.Cancel
+                                ) {
+                                    finished = true
+                                    break
+                                }
                                 for (change in event.changes) {
                                     if (change.id != down.id) continue
-                                    if (change.type == PointerEventType.Release ||
-                                        change.type == PointerEventType.Cancel
-                                    ) {
-                                        finished = true
-                                        break
-                                    }
                                     val delta = change.positionChange()
                                     if (delta != Offset.Zero) {
                                         change.consume()
