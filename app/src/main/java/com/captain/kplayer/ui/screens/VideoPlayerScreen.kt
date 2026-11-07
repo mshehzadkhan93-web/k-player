@@ -82,7 +82,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalConfiguration
@@ -438,18 +437,15 @@ fun VideoPlayerScreen(
                                     }
                                     continue
                                 }
-                                // Finger lifted or gesture cancelled:
-                                // PointerEvent.type (not PointerInputChange
-                                // .type, which is the input-device kind)
-                                // reports Release / Cancel for the event.
-                                if (event.type == PointerEventType.Release ||
-                                    event.type == PointerEventType.Cancel
-                                ) {
-                                    finished = true
-                                    break
-                                }
                                 for (change in event.changes) {
                                     if (change.id != down.id) continue
+                                    // Finger lifted or gesture cancelled:
+                                    // after the initial down, pressed is
+                                    // false on both release and cancel.
+                                    if (!change.pressed) {
+                                        finished = true
+                                        break
+                                    }
                                     val delta = change.positionChange()
                                     if (delta != Offset.Zero) {
                                         change.consume()
