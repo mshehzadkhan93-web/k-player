@@ -82,7 +82,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.changedToUpOrCanceled
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalConfiguration
@@ -440,7 +440,9 @@ fun VideoPlayerScreen(
                                 }
                                 for (change in event.changes) {
                                     if (change.id != down.id) continue
-                                    if (change.changedToUpOrCanceled()) {
+                                    if (change.type == PointerEventType.Release ||
+                                        change.type == PointerEventType.Cancel
+                                    ) {
                                         finished = true
                                         break
                                     }
