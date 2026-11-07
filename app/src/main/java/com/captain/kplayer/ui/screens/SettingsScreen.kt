@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.navigation.NavHostController
+import com.captain.kplayer.BuildConfig
 import com.captain.kplayer.ui.components.GlassButton
 import com.captain.kplayer.ui.components.GlassCard
 import com.captain.kplayer.ui.components.SectionHeader
@@ -495,7 +496,7 @@ fun SettingsScreen(
             GroupCard("About") {
                 SettingRow(
                     title = "Version",
-                    subtitle = "K-Player 1.1",
+                    subtitle = "K-Player ${BuildConfig.VERSION_NAME}",
                     trailing = {}
                 )
                 ActionRow(
@@ -504,7 +505,7 @@ fun SettingsScreen(
                     onClick = {
                         Toast.makeText(
                             context,
-                            "You are on the latest version (1.1)",
+                            "You are on the latest version (${BuildConfig.VERSION_NAME})",
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -552,7 +553,7 @@ fun SettingsScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Version 1.1",
+                            text = "Version ${BuildConfig.VERSION_NAME}",
                             color = TextSecondary,
                             fontSize = 13.sp,
                             modifier = Modifier.padding(top = 2.dp)

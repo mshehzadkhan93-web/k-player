@@ -20,6 +20,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,7 +29,6 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -42,17 +42,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.BrightnessHigh
 import androidx.compose.material.icons.rounded.Equalizer
-import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PictureInPictureAlt
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.ScreenRotation
@@ -81,6 +79,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -123,11 +122,22 @@ private sealed interface GestureOverlay {
 }
 
 /**
- * Fullscreen video player: one glass top bar, one uniform row of five
- * circular glass transport buttons, one glass bottom panel (seek + transport
- * pills + utility pills), and a single pointer-input gesture block for the
- * video area (tap to toggle controls, double-tap to seek by the configured
- * step, long-press for 2x speed, drag for brightness / volume / seek).
+ * Fullscreen video player, laid out exactly like the approved v3 mockup:
+ * one glass top bar (back, gradient brand, video title, five round glass
+ * icons: volume, subtitles, equalizer, aspect, menu), one row of five
+ * LARGE frosted-glass transport circles (frosted play button with a
+ * gradient triangle, not a solid gradient fill), and one SHORT glass
+ * bottom panel (seek row + ONE row of ten small pills).
+ *
+ * Gestures live on the ROOT Box: one pointer-input block owns tap,
+ * double-tap, long-press and drag. It uses
+ * awaitFirstDown(requireUnconsumed = false) so the gesture layer sees
+ * EVERY down — even one a child (or the embedded PlayerView) already
+ * consumed — instead of starving when a down arrives pre-consumed.
+ * A tap / double-tap / long-press only fires when the down was NOT
+ * consumed (so button taps never double-fire); vertical brightness /
+ * volume drags always apply; horizontal seek drags are skipped when the
+ * down was consumed (the seek Slider owns those).
  * Speed and aspect controls, screen lock, background play,
  * picture-in-picture, audio/subtitle sheets, equalizer, playlist and video
  * info are all wired as before.
@@ -184,6 +194,7 @@ fun VideoPlayerScreen(
     var showEqualizer by remember { mutableStateOf(false) }
     var showVideoInfo by remember { mutableStateOf(false) }
     var showSpeedMenu by remember { mutableStateOf(false) }
+    var showTopMenu by remember { mutableStateOf(false) }
     var overlay by remember { mutableStateOf<GestureOverlay?>(null) }
     var scrubFraction by remember { mutableStateOf<Float?>(null) }
     var lastSliderSeekMs by remember { mutableStateOf(0L) }
@@ -317,10 +328,192 @@ fun VideoPlayerScreen(
         return if (systemValue >= 0f) systemValue else playerVm.brightnessPercent.value
     }
 
+    // Gesture layer on the ROOT Box: one pointer-input block owns tap,
+    // double-tap, long-press and drag. It uses
+    // awaitFirstDown(requireUnconsumed = false) so the layer sees EVERY
+    // down — even one a child (button, Slider, or the embedded
+    // PlayerView) already consumed — instead of starving when a down
+    // arrives pre-consumed. A tap / double-tap / long-press only fires
+    // when the down was NOT consumed (so button taps never double-fire);
+    // vertical brightness / volume drags always apply; horizontal seek
+    // drags are skipped when the down was consumed (the seek Slider owns
+    // those).
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .pointerInput(
+                locked, doubleTapStep, gestureBrightness, gestureVolume,
+                gestureSeek, gestureSensitivity
+            ) {
+                val widthPx = size.width.toFloat()
+                val heightPx = size.height.toFloat()
+                val touchSlop = viewConfiguration.touchSlop
+                val longPressTimeoutMs = viewConfiguration.longPressTimeoutMillis
+                var lastTapUpMs = 0L
+                var lastTapX = 0f
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val downConsumed = down.isConsumed
+                    val downPos = down.position
+                    val downMs = System.currentTimeMillis()
+                    // Baselines are re-synced from LIVE system state
+                    // at the start of every gesture — never from a
+                    // cached value. That is what used to reset the
+                    // volume to 0 after the hardware volume buttons
+                    // had been used, and what left the brightness
+                    // swipe starting from a stale value.
+                    playerVm.refreshVolume()
+                    val startVolume = playerVm.volumePercent.value
+                    val startBrightness = liveBrightness()
+                    val startPosition = playerVm.positionMs.value
+                    val isSecondTap = downMs - lastTapUpMs < 300L &&
+                        abs(downPos.x - lastTapX) < touchSlop * 4
+                    var totalDrag = Offset.Zero
+                    var dragKind = 0 // 0 undecided, 1 brightness, 2 volume, 3 seek
+                    var seekPreview = startPosition
+                    var lastLiveSeekMs = 0L
+                    var longPressed = false
+                    var finished = false
+                    while (!finished) {
+                        val remainingLongPress =
+                            longPressTimeoutMs - (System.currentTimeMillis() - downMs)
+                        val event = if (!longPressed && dragKind == 0 &&
+                            totalDrag == Offset.Zero && remainingLongPress > 0
+                        ) {
+                            // Finger still down, no movement yet:
+                            // wait only until the long-press timeout.
+                            withTimeoutOrNull(remainingLongPress) {
+                                awaitPointerEvent()
+                            }
+                        } else {
+                            awaitPointerEvent()
+                        }
+                        if (event == null) {
+                            // Held still past the long-press timeout.
+                            if (!locked && !downConsumed) {
+                                playerVm.setSpeedTemporarily(2f)
+                                overlay = GestureOverlay.Speed2x
+                                longPressed = true
+                            }
+                            continue
+                        }
+                        for (change in event.changes) {
+                            if (change.id != down.id) continue
+                            // Finger lifted or gesture cancelled:
+                            // after the initial down, pressed is
+                            // false on both release and cancel.
+                            if (!change.pressed) {
+                                finished = true
+                                break
+                            }
+                            val delta = change.positionChange()
+                            if (delta != Offset.Zero) {
+                                totalDrag += delta
+                                if (dragKind == 0 && !longPressed) {
+                                    if (abs(totalDrag.x) > touchSlop ||
+                                        abs(totalDrag.y) > touchSlop
+                                    ) {
+                                        dragKind = when {
+                                            abs(totalDrag.x) > abs(totalDrag.y) ->
+                                                if (gestureSeek && !downConsumed) 3 else 0
+                                            change.position.x < widthPx / 2f ->
+                                                if (gestureBrightness) 1 else 0
+                                            else ->
+                                                if (gestureVolume) 2 else 0
+                                        }
+                                    }
+                                }
+                                // Only consume once this layer owns the
+                                // drag: consuming earlier would cancel
+                                // the seek Slider's own slop detection
+                                // (it aborts when a change arrives
+                                // already consumed).
+                                if (dragKind != 0) change.consume()
+                                if (!locked) {
+                                    when (dragKind) {
+                                        1 -> {
+                                            // Left-half vertical drag.
+                                            val next = (startBrightness +
+                                                -totalDrag.y / heightPx *
+                                                gestureSensitivity)
+                                                .coerceIn(0.05f, 1f)
+                                            playerVm.setBrightnessPercent(next)
+                                            overlay = GestureOverlay.Brightness(
+                                                (next * 100).toInt()
+                                            )
+                                        }
+                                        2 -> {
+                                            // Right-half vertical drag.
+                                            val next = (startVolume +
+                                                (-totalDrag.y / heightPx * 100f *
+                                                    gestureSensitivity).toInt())
+                                                .coerceIn(0, 100)
+                                            playerVm.setVolumePercent(next)
+                                            overlay = GestureOverlay.Volume(next)
+                                        }
+                                        3 -> {
+                                            // Horizontal drag: live
+                                            // preview + throttled
+                                            // live seeks, settling
+                                            // on release.
+                                            val total = playerVm.durationMs.value
+                                            seekPreview = (startPosition +
+                                                (totalDrag.x / widthPx * total *
+                                                    gestureSensitivity).toLong())
+                                                .coerceIn(0L, total.coerceAtLeast(0L))
+                                            overlay = GestureOverlay.Seek(
+                                                seekPreview, total
+                                            )
+                                            val now = System.currentTimeMillis()
+                                            if (now - lastLiveSeekMs > 150L) {
+                                                lastLiveSeekMs = now
+                                                playerVm.seekTo(seekPreview)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Finger up (or gesture cancelled): settle. Tap,
+                    // double-tap and long-press only fire when the down
+                    // was NOT consumed (a button/slider owned it).
+                    if (longPressed) {
+                        playerVm.restoreSpeed()
+                        overlay = null
+                    } else if (!locked && !downConsumed) {
+                        when {
+                            dragKind == 3 -> {
+                                playerVm.seekTo(seekPreview)
+                                overlay = null
+                            }
+                            dragKind == 1 || dragKind == 2 -> overlay = null
+                            isSecondTap -> {
+                                val stepMs = doubleTapStep * 1000L
+                                if (downPos.x < widthPx / 2f) {
+                                    playerVm.seekRelative(-stepMs)
+                                    overlay = GestureOverlay.DoubleTap("-${doubleTapStep}s")
+                                } else {
+                                    playerVm.seekRelative(stepMs)
+                                    overlay = GestureOverlay.DoubleTap("+${doubleTapStep}s")
+                                }
+                                lastTapUpMs = System.currentTimeMillis()
+                                lastTapX = downPos.x
+                            }
+                            else -> {
+                                controlsVisible = !controlsVisible
+                                lastTapUpMs = System.currentTimeMillis()
+                                lastTapX = downPos.x
+                            }
+                        }
+                    } else if (!locked && (dragKind == 1 || dragKind == 2)) {
+                        // A brightness/volume drag that started on a
+                        // control: hide its bubble on release.
+                        overlay = null
+                    }
+                }
+            }
     ) {
         if (playerVm.isPlayerReady) {
             AndroidView(
@@ -375,175 +568,6 @@ fun VideoPlayerScreen(
             }
         }
 
-        // Gesture layer: ONE pointer-input block owns tap, double-tap,
-        // long-press and drag, so the detectors can no longer fight each
-        // other (or leave a drag half-consumed by a tap detector).
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val widthPx = constraints.maxWidth.toFloat()
-            val heightPx = constraints.maxHeight.toFloat()
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(
-                        locked, doubleTapStep, gestureBrightness, gestureVolume,
-                        gestureSeek, gestureSensitivity, widthPx, heightPx
-                    ) {
-                        val touchSlop = viewConfiguration.touchSlop
-                        val longPressTimeoutMs = viewConfiguration.longPressTimeoutMillis
-                        var lastTapUpMs = 0L
-                        var lastTapX = 0f
-                        awaitEachGesture {
-                            val down = awaitFirstDown()
-                            val downPos = down.position
-                            val downMs = System.currentTimeMillis()
-                            // Baselines are re-synced from LIVE system state
-                            // at the start of every gesture — never from a
-                            // cached value. That is what used to reset the
-                            // volume to 0 after the hardware volume buttons
-                            // had been used, and what left the brightness
-                            // swipe starting from a stale value.
-                            playerVm.refreshVolume()
-                            val startVolume = playerVm.volumePercent.value
-                            val startBrightness = liveBrightness()
-                            val startPosition = playerVm.positionMs.value
-                            val isSecondTap = downMs - lastTapUpMs < 300L &&
-                                abs(downPos.x - lastTapX) < touchSlop * 4
-                            var totalDrag = Offset.Zero
-                            var dragKind = 0 // 0 undecided, 1 brightness, 2 volume, 3 seek
-                            var seekPreview = startPosition
-                            var lastLiveSeekMs = 0L
-                            var longPressed = false
-                            var finished = false
-                            while (!finished) {
-                                val remainingLongPress =
-                                    longPressTimeoutMs - (System.currentTimeMillis() - downMs)
-                                val event = if (!longPressed && dragKind == 0 &&
-                                    totalDrag == Offset.Zero && remainingLongPress > 0
-                                ) {
-                                    // Finger still down, no movement yet:
-                                    // wait only until the long-press timeout.
-                                    withTimeoutOrNull(remainingLongPress) {
-                                        awaitPointerEvent()
-                                    }
-                                } else {
-                                    awaitPointerEvent()
-                                }
-                                if (event == null) {
-                                    // Held still past the long-press timeout.
-                                    if (!locked) {
-                                        playerVm.setSpeedTemporarily(2f)
-                                        overlay = GestureOverlay.Speed2x
-                                        longPressed = true
-                                    }
-                                    continue
-                                }
-                                for (change in event.changes) {
-                                    if (change.id != down.id) continue
-                                    // Finger lifted or gesture cancelled:
-                                    // after the initial down, pressed is
-                                    // false on both release and cancel.
-                                    if (!change.pressed) {
-                                        finished = true
-                                        break
-                                    }
-                                    val delta = change.positionChange()
-                                    if (delta != Offset.Zero) {
-                                        change.consume()
-                                        totalDrag += delta
-                                        if (dragKind == 0 && !longPressed) {
-                                            if (abs(totalDrag.x) > touchSlop ||
-                                                abs(totalDrag.y) > touchSlop
-                                            ) {
-                                                dragKind = when {
-                                                    abs(totalDrag.x) > abs(totalDrag.y) ->
-                                                        if (gestureSeek) 3 else 0
-                                                    change.position.x < widthPx / 2f ->
-                                                        if (gestureBrightness) 1 else 0
-                                                    else ->
-                                                        if (gestureVolume) 2 else 0
-                                                }
-                                            }
-                                        }
-                                        if (!locked) {
-                                            when (dragKind) {
-                                                1 -> {
-                                                    // Left-half vertical drag.
-                                                    val next = (startBrightness +
-                                                        -totalDrag.y / heightPx *
-                                                        gestureSensitivity)
-                                                        .coerceIn(0.05f, 1f)
-                                                    playerVm.setBrightnessPercent(next)
-                                                    overlay = GestureOverlay.Brightness(
-                                                        (next * 100).toInt()
-                                                    )
-                                                }
-                                                2 -> {
-                                                    // Right-half vertical drag.
-                                                    val next = (startVolume +
-                                                        (-totalDrag.y / heightPx * 100f *
-                                                            gestureSensitivity).toInt())
-                                                        .coerceIn(0, 100)
-                                                    playerVm.setVolumePercent(next)
-                                                    overlay = GestureOverlay.Volume(next)
-                                                }
-                                                3 -> {
-                                                    // Horizontal drag: live
-                                                    // preview + throttled
-                                                    // live seeks, settling
-                                                    // on release.
-                                                    val total = playerVm.durationMs.value
-                                                    seekPreview = (startPosition +
-                                                        (totalDrag.x / widthPx * total *
-                                                            gestureSensitivity).toLong())
-                                                        .coerceIn(0L, total.coerceAtLeast(0L))
-                                                    overlay = GestureOverlay.Seek(
-                                                        seekPreview, total
-                                                    )
-                                                    val now = System.currentTimeMillis()
-                                                    if (now - lastLiveSeekMs > 150L) {
-                                                        lastLiveSeekMs = now
-                                                        playerVm.seekTo(seekPreview)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            // Finger up (or gesture cancelled): settle.
-                            if (longPressed) {
-                                playerVm.restoreSpeed()
-                                overlay = null
-                            } else if (!locked) {
-                                when {
-                                    dragKind == 3 -> {
-                                        playerVm.seekTo(seekPreview)
-                                        overlay = null
-                                    }
-                                    dragKind == 1 || dragKind == 2 -> overlay = null
-                                    isSecondTap -> {
-                                        val stepMs = doubleTapStep * 1000L
-                                        if (downPos.x < widthPx / 2f) {
-                                            playerVm.seekRelative(-stepMs)
-                                            overlay = GestureOverlay.DoubleTap("-${doubleTapStep}s")
-                                        } else {
-                                            playerVm.seekRelative(stepMs)
-                                            overlay = GestureOverlay.DoubleTap("+${doubleTapStep}s")
-                                        }
-                                        lastTapUpMs = System.currentTimeMillis()
-                                        lastTapX = downPos.x
-                                    }
-                                    else -> {
-                                        controlsVisible = !controlsVisible
-                                        lastTapUpMs = System.currentTimeMillis()
-                                        lastTapX = downPos.x
-                                    }
-                                }
-                            }
-                        }
-                    }
-            )
-        }
 
         // Gesture overlay (brightness / volume / seek preview / 2x / double-tap).
         overlay?.let { current ->
@@ -674,10 +698,13 @@ fun VideoPlayerScreen(
                                 .weight(1f)
                                 .padding(horizontal = 10.dp)
                         )
+                        // Five icons, like the v3 mockup: volume, subtitles,
+                        // equalizer, aspect, menu. Everything else lives in
+                        // the menu so the bar stays one clean row.
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             GlassCircleButton(
                                 size = 40.dp,
-                                icon = Icons.Rounded.Audiotrack,
+                                icon = Icons.Rounded.VolumeUp,
                                 description = "Audio track",
                                 iconSize = 20.dp
                             ) { showAudioSheet = true }
@@ -689,42 +716,80 @@ fun VideoPlayerScreen(
                             ) { showSubtitleSheet = true }
                             GlassCircleButton(
                                 size = 40.dp,
-                                icon = Icons.Rounded.FileUpload,
-                                description = "Add subtitle file",
-                                iconSize = 20.dp
-                            ) { subtitlePicker.launch("*/*") }
-                            GlassCircleButton(
-                                size = 40.dp,
                                 icon = Icons.Rounded.Equalizer,
                                 description = "Equalizer",
                                 iconSize = 20.dp
                             ) { showEqualizer = true }
-                            if (pipEnabled) {
+                            GlassCircleButton(
+                                size = 40.dp,
+                                icon = Icons.Rounded.AspectRatio,
+                                description = "Aspect ratio",
+                                iconSize = 20.dp
+                            ) { playerVm.cycleAspect() }
+                            Box {
                                 GlassCircleButton(
                                     size = 40.dp,
-                                    icon = Icons.Rounded.PictureInPictureAlt,
-                                    description = "Picture-in-picture",
+                                    icon = Icons.Rounded.MoreVert,
+                                    description = "More",
                                     iconSize = 20.dp
-                                ) { enterPip() }
+                                ) { showTopMenu = true }
+                                DropdownMenu(
+                                    expanded = showTopMenu,
+                                    onDismissRequest = { showTopMenu = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Add subtitle file") },
+                                        onClick = {
+                                            showTopMenu = false
+                                            subtitlePicker.launch("*/*")
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Picture-in-picture") },
+                                        onClick = {
+                                            showTopMenu = false
+                                            if (pipEnabled) {
+                                                enterPip()
+                                            } else {
+                                                Toast.makeText(
+                                                    context,
+                                                    "Enable PiP in Settings > Playback",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Rotate screen") },
+                                        onClick = { showTopMenu = false; rotate() }
+                                    )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                if (backgroundPlay) "Background play: On"
+                                                else "Background play: Off"
+                                            )
+                                        },
+                                        onClick = {
+                                            showTopMenu = false
+                                            settingsVm.setBackgroundPlay(!backgroundPlay)
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Video info") },
+                                        onClick = { showTopMenu = false; showVideoInfo = true }
+                                    )
+                                }
                             }
-                            GlassCircleButton(
-                                size = 40.dp,
-                                icon = Icons.Rounded.ScreenRotation,
-                                description = "Rotate",
-                                iconSize = 20.dp
-                            ) { rotate() }
-                            GlassCircleButton(
-                                size = 40.dp,
-                                icon = Icons.Rounded.MoreVert,
-                                description = "More",
-                                iconSize = 20.dp
-                            ) { showVideoInfo = true }
                         }
                     }
                 }
 
-                // Center transport: exactly one row of five uniform circular
-                // glass buttons, evenly spaced across the full width.
+                // Center transport: one row of five LARGE frosted-glass
+                // circles, evenly spread across the full width, bright
+                // white borders — exactly like the v3 mockup. The play
+                // button is frosted glass with a gradient triangle,
+                // NOT a solid gradient-filled circle.
                 AnimatedVisibility(
                     visible = controlsVisible && !locked,
                     enter = fadeIn(animationSpec = tween(300)) +
@@ -741,51 +806,62 @@ fun VideoPlayerScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         GlassCircleButton(
-                            size = 64.dp,
+                            size = 84.dp,
                             icon = Icons.Rounded.SkipPrevious,
                             description = "Previous",
-                            iconSize = 32.dp
+                            iconSize = 40.dp
                         ) { playerVm.playPrevious() }
                         GlassCircleButton(
-                            size = 64.dp,
+                            size = 84.dp,
                             icon = Icons.Rounded.Replay10,
                             description = "Back ${doubleTapStep} seconds",
-                            iconSize = 32.dp
+                            iconSize = 40.dp
                         ) { playerVm.seekRelative(-doubleTapStep * 1000L) }
-                        // Play / pause: larger, glowing with the accent gradient.
+                        // Play / pause: the biggest circle, frosted glass
+                        // with a bright border and a soft accent glow.
+                        // Paused shows a gradient triangle; playing shows
+                        // the white pause icon.
                         Box(
                             modifier = Modifier
-                                .size(88.dp)
+                                .size(112.dp)
                                 .shadow(
                                     16.dp,
                                     CircleShape,
                                     ambientColor = LocalAccent.current.start.copy(alpha = 0.55f),
                                     spotColor = LocalAccent.current.start.copy(alpha = 0.55f)
                                 )
-                                .background(LocalAccent.current.brush, CircleShape)
-                                .border(1.dp, Color.White.copy(alpha = 0.6f), CircleShape)
+                                .background(Color.White.copy(alpha = 0.12f), CircleShape)
+                                .border(
+                                    1.5.dp,
+                                    Color.White.copy(alpha = 0.75f),
+                                    CircleShape
+                                )
                                 .clip(CircleShape)
                                 .clickable { playerVm.togglePlay() },
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                contentDescription = if (isPlaying) "Pause" else "Play",
-                                tint = Color.White,
-                                modifier = Modifier.size(44.dp)
-                            )
+                            if (isPlaying) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Pause,
+                                    contentDescription = "Pause",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(52.dp)
+                                )
+                            } else {
+                                GradientTriangle(modifier = Modifier.size(52.dp))
+                            }
                         }
                         GlassCircleButton(
-                            size = 64.dp,
+                            size = 84.dp,
                             icon = Icons.Rounded.Forward10,
                             description = "Forward ${doubleTapStep} seconds",
-                            iconSize = 32.dp
+                            iconSize = 40.dp
                         ) { playerVm.seekRelative(doubleTapStep * 1000L) }
                         GlassCircleButton(
-                            size = 64.dp,
+                            size = 84.dp,
                             icon = Icons.Rounded.SkipNext,
                             description = "Next",
-                            iconSize = 32.dp
+                            iconSize = 40.dp
                         ) { playerVm.playNext() }
                     }
                 }
@@ -878,12 +954,17 @@ fun VideoPlayerScreen(
                                 fontWeight = FontWeight.Medium
                             )
                         }
-                        // Transport pills — the only transport row down here.
+                        // ONE row of ten small pills, same order as the
+                        // v3 mockup: prev, -10s, +10s, next, speed,
+                        // rotate, lock, audio, playlist, A-B. (The
+                        // mockup's 10th "queue" pill is A-B here, since
+                        // playlist and queue are the same screen in this
+                        // app.) The panel stays short, like the mockup.
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 2.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                .padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             GlassPillButton(
                                 modifier = Modifier.weight(1f),
@@ -905,14 +986,6 @@ fun VideoPlayerScreen(
                                 icon = Icons.Rounded.SkipNext,
                                 onClick = { playerVm.playNext() }
                             )
-                        }
-                        // Utility pills.
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
                             Box(modifier = Modifier.weight(1f)) {
                                 GlassPillButton(
                                     modifier = Modifier.fillMaxWidth(),
@@ -936,12 +1009,8 @@ fun VideoPlayerScreen(
                             }
                             GlassPillButton(
                                 modifier = Modifier.weight(1f),
-                                text = when (aspect) {
-                                    VideoAspect.FIT -> "Fit"
-                                    VideoAspect.FILL -> "Fill"
-                                    VideoAspect.ZOOM -> "Zoom"
-                                },
-                                onClick = { playerVm.cycleAspect() }
+                                icon = Icons.Rounded.ScreenRotation,
+                                onClick = { rotate() }
                             )
                             GlassPillButton(
                                 modifier = Modifier.weight(1f),
@@ -950,8 +1019,8 @@ fun VideoPlayerScreen(
                             )
                             GlassPillButton(
                                 modifier = Modifier.weight(1f),
-                                text = if (backgroundPlay) "BG On" else "BG Off",
-                                onClick = { settingsVm.setBackgroundPlay(!backgroundPlay) }
+                                icon = Icons.Rounded.Audiotrack,
+                                onClick = { showAudioSheet = true }
                             )
                             GlassPillButton(
                                 modifier = Modifier.weight(1f),
@@ -1040,7 +1109,7 @@ private fun GlassCircleButton(
             .size(size)
             .shadow(6.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.3f))
             .background(Color.White.copy(alpha = 0.12f), CircleShape)
-            .border(1.dp, Color.White.copy(alpha = 0.45f), CircleShape)
+            .border(1.5.dp, Color.White.copy(alpha = 0.65f), CircleShape)
             .clip(CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
@@ -1054,7 +1123,7 @@ private fun GlassCircleButton(
     }
 }
 
-/** Uniform glass pill (bottom transport and utility rows). */
+/** Small compact glass pill — the ten pills in the bottom panel, one row. */
 @Composable
 private fun GlassPillButton(
     modifier: Modifier = Modifier,
@@ -1065,42 +1134,63 @@ private fun GlassPillButton(
 ) {
     Box(
         modifier = modifier
-            .height(40.dp)
+            .height(36.dp)
             .background(
                 Color.White.copy(alpha = if (enabled) 0.12f else 0.05f),
-                RoundedCornerShape(20.dp)
+                RoundedCornerShape(18.dp)
             )
             .border(
                 1.dp,
-                Color.White.copy(alpha = if (enabled) 0.35f else 0.12f),
-                RoundedCornerShape(20.dp)
+                Color.White.copy(alpha = if (enabled) 0.4f else 0.12f),
+                RoundedCornerShape(18.dp)
             )
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(18.dp))
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             if (icon != null) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
                     tint = if (enabled) Color.White else Color.White.copy(alpha = 0.45f),
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp)
                 )
             }
             if (text != null) {
                 Text(
                     text = text,
                     color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f),
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1
                 )
             }
         }
+    }
+}
+
+/**
+ * The play triangle from the v3 mockup: a right-pointing triangle filled
+ * with the theme's accent gradient, drawn on the frosted-glass play
+ * button. (A plain white Icon cannot carry the gradient.)
+ */
+@Composable
+private fun GradientTriangle(modifier: Modifier = Modifier) {
+    val brush = LocalAccent.current.brush
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val path = Path().apply {
+            moveTo(w * 0.30f, h * 0.20f)
+            lineTo(w * 0.30f, h * 0.80f)
+            lineTo(w * 0.78f, h * 0.50f)
+            close()
+        }
+        drawPath(path = path, brush = brush)
     }
 }
 

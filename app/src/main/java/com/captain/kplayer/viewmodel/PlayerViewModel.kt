@@ -107,11 +107,16 @@ class PlayerViewModel(
                 _resumePrompt.value = null
                 softwareFallbackTried = false
                 seekWatchdogJob?.cancel()
+                bufferingWatchdogJob?.cancel()
             }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            _isBuffering.value = playbackState == Player.STATE_BUFFERING
+            val buffering = playbackState == Player.STATE_BUFFERING
+            _isBuffering.value = buffering
+            // A local file that stays in BUFFERING is almost always
+            // decode-bound, not I/O-bound: arm the stall watchdog.
+            if (buffering) armBufferingWatchdog() else bufferingWatchdogJob?.cancel()
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -288,6 +293,8 @@ class PlayerViewModel(
     private var sleepJob: Job? = null
     private var tickerJob: Job? = null
     private var seekWatchdogJob: Job? = null
+    /** Fires when a local file stays in BUFFERING too long (see below). */
+    private var bufferingWatchdogJob: Job? = null
     private var lastSeekRequestMs = 0L
     private var lastSeekTargetMs = -1L
     private var seekRetryCount = 0
@@ -408,6 +415,18 @@ class PlayerViewModel(
             rebuildPlayer("sw")
             return
         }
+        if (isDecoderError) {
+            // Software decoding was already tried (or is the current
+            // mode) and still failed: say so plainly instead of
+            // pretending a retry will fix it. A video track the phone's
+            // MediaCodec cannot decode (e.g. 4K HEVC Main 10 without
+            // hardware support) cannot be fixed by the FFmpeg audio
+            // extension, which only decodes audio.
+            _playerError.value =
+                "This phone can't decode this video's format. " +
+                "Try a lower-quality copy."
+            return
+        }
         _playerError.value = when (error.errorCode) {
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
@@ -427,6 +446,34 @@ class PlayerViewModel(
             (uri.scheme == "http" || uri.scheme == "https") && !uri.host.isNullOrBlank()
         } catch (_: Exception) {
             false
+        }
+    }
+
+    /**
+     * Bug: a heavy local file (e.g. a large MKV) can sit in BUFFERING
+     * forever without ever raising an error — a silent stuck spinner.
+     * If a LOCAL file (not a stream) is still buffering after 15s, say
+     * so plainly instead of spinning forever: retry once with software
+     * decoding, and if that was already tried, tell the user the phone
+     * cannot decode this file.
+     */
+    private fun armBufferingWatchdog() {
+        bufferingWatchdogJob?.cancel()
+        bufferingWatchdogJob = viewModelScope.launch {
+            delay(15_000)
+            if (!playerBuilt || released) return@launch
+            if (!_isBuffering.value) return@launch
+            val url = _currentEntry.value?.url.orEmpty()
+            if (url.startsWith("http")) return@launch // streams: network, not decode
+            if (!softwareFallbackTried && currentDecodingMode != "sw") {
+                softwareFallbackTried = true
+                _playerError.value = "Still loading — retrying with software decoding…"
+                rebuildPlayer("sw")
+            } else {
+                _playerError.value =
+                    "This video is too heavy for this phone to decode. " +
+                    "Try a lower-quality copy."
+            }
         }
     }
 
