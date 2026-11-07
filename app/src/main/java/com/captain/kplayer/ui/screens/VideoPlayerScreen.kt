@@ -43,7 +43,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AspectRatio
-import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.BrightnessHigh
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.Forward10
@@ -51,9 +50,8 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PlaylistPlay
+import androidx.compose.material.icons.rounded.Play
 import androidx.compose.material.icons.rounded.Replay10
-import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Subtitles
@@ -81,6 +79,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalConfiguration
@@ -119,15 +118,17 @@ private sealed interface GestureOverlay {
     data class Seek(val previewMs: Long, val totalMs: Long) : GestureOverlay
     data class DoubleTap(val label: String) : GestureOverlay
     data object Speed2x : GestureOverlay
+    /** Live aspect label shown while pinching (Fit / Fill / Zoom). */
+    data class Zoom(val label: String) : GestureOverlay
 }
 
 /**
- * Fullscreen video player, laid out exactly like the approved v3 mockup:
+ * Fullscreen video player, laid out exactly like the approved mockup:
  * one glass top bar (back, gradient brand, video title, five round glass
  * icons: volume, subtitles, equalizer, aspect, menu), one row of five
  * LARGE frosted-glass transport circles (frosted play button with a
  * gradient triangle, not a solid gradient fill), and one SHORT glass
- * bottom panel (seek row + ONE row of ten small pills).
+ * bottom panel (seek row + ONE row of six small pills).
  *
  * Gestures live on the ROOT Box: one pointer-input block owns tap,
  * double-tap, long-press and drag. It uses
@@ -350,6 +351,31 @@ fun VideoPlayerScreen(
                 val heightPx = size.height.toFloat()
                 val touchSlop = viewConfiguration.touchSlop
                 val longPressTimeoutMs = viewConfiguration.longPressTimeoutMillis
+                // Pinch-to-zoom helpers: aspect steps go through the
+                // ViewModel so the Fit pill and the PlayerView
+                // resizeMode stay in sync with pinching.
+                fun stepAspectZoomIn() {
+                    val next = when (playerVm.aspect.value) {
+                        VideoAspect.FIT -> VideoAspect.FILL
+                        VideoAspect.FILL -> VideoAspect.ZOOM
+                        VideoAspect.ZOOM -> null
+                    }
+                    if (next != null) {
+                        playerVm.setAspect(next)
+                        overlay = GestureOverlay.Zoom(aspectLabel(next))
+                    }
+                }
+                fun stepAspectZoomOut() {
+                    val next = when (playerVm.aspect.value) {
+                        VideoAspect.ZOOM -> VideoAspect.FILL
+                        VideoAspect.FILL -> VideoAspect.FIT
+                        VideoAspect.FIT -> null
+                    }
+                    if (next != null) {
+                        playerVm.setAspect(next)
+                        overlay = GestureOverlay.Zoom(aspectLabel(next))
+                    }
+                }
                 var lastTapUpMs = 0L
                 var lastTapX = 0f
                 awaitEachGesture {
@@ -375,10 +401,23 @@ fun VideoPlayerScreen(
                     var lastLiveSeekMs = 0L
                     var longPressed = false
                     var finished = false
+                    // Pinch-to-zoom state: a second finger switches
+                    // the gesture to pinch mode; one-finger drag logic
+                    // is ignored until both fingers lift.
+                    var pinchId: PointerId? = null
+                    var pinchActive = false
+                    var pinched = false
+                    var pinchDone = false
+                    var firstPos = downPos
+                    var secondPos: Offset? = null
+                    var lastPinchDistance: Float? = null
+                    var pinchAccumPx = 0f
+                    // Cumulative finger-spread change per aspect step.
+                    val pinchStepPx = 120f
                     while (!finished) {
                         val remainingLongPress =
                             longPressTimeoutMs - (System.currentTimeMillis() - downMs)
-                        val event = if (!longPressed && dragKind == 0 &&
+                        val event = if (!longPressed && !pinchActive && dragKind == 0 &&
                             totalDrag == Offset.Zero && remainingLongPress > 0
                         ) {
                             // Finger still down, no movement yet:
@@ -391,7 +430,7 @@ fun VideoPlayerScreen(
                         }
                         if (event == null) {
                             // Held still past the long-press timeout.
-                            if (!locked && !downConsumed) {
+                            if (!locked && !downConsumed && !pinchActive) {
                                 playerVm.setSpeedTemporarily(2f)
                                 overlay = GestureOverlay.Speed2x
                                 longPressed = true
@@ -399,6 +438,53 @@ fun VideoPlayerScreen(
                             continue
                         }
                         for (change in event.changes) {
+                            // --- Second finger: pinch-to-zoom. ---
+                            // A new pointer going down while the first
+                            // finger is held switches to pinch mode.
+                            // Two fingers only: a one-finger swipe can
+                            // never enter this branch.
+                            if (change.id != down.id && change.pressed &&
+                                pinchId == null && !pinchDone &&
+                                !locked && !downConsumed
+                            ) {
+                                pinchId = change.id
+                                pinchActive = true
+                                pinched = true
+                                secondPos = change.position
+                                lastPinchDistance = null
+                                pinchAccumPx = 0f
+                                // Abandon any one-finger drag already in
+                                // progress, and restore 2x if a
+                                // long-press had started it.
+                                if (longPressed) {
+                                    playerVm.restoreSpeed()
+                                    longPressed = false
+                                }
+                                dragKind = 0
+                                totalDrag = Offset.Zero
+                                overlay = GestureOverlay.Zoom(
+                                    aspectLabel(playerVm.aspect.value)
+                                )
+                                continue
+                            }
+                            if (change.id == pinchId) {
+                                // Second finger lifted: the pinch ends.
+                                // The first finger may still be down,
+                                // but its drags stay ignored until it
+                                // lifts too.
+                                if (!change.pressed) {
+                                    pinchId = null
+                                    pinchActive = false
+                                    pinchDone = true
+                                    secondPos = null
+                                    lastPinchDistance = null
+                                    pinchAccumPx = 0f
+                                    overlay = null
+                                } else {
+                                    secondPos = change.position
+                                }
+                                continue
+                            }
                             if (change.id != down.id) continue
                             // Finger lifted or gesture cancelled:
                             // after the initial down, pressed is
@@ -407,6 +493,11 @@ fun VideoPlayerScreen(
                                 finished = true
                                 break
                             }
+                            firstPos = change.position
+                            // While pinching (or after a pinch, until
+                            // both fingers lift), one-finger drag logic
+                            // is ignored entirely.
+                            if (pinchActive || pinchDone) continue
                             val delta = change.positionChange()
                             if (delta != Offset.Zero) {
                                 totalDrag += delta
@@ -475,11 +566,39 @@ fun VideoPlayerScreen(
                                 }
                             }
                         }
+                        // Pinch distance for this event: step the aspect
+                        // on cumulative spread change (out = zoom in,
+                        // in = zoom out). The first frame only sets the
+                        // baseline, so a pinch never jumps a step on
+                        // its first movement.
+                        if (pinchActive) {
+                            val second = secondPos
+                            if (second != null) {
+                                val distance = (firstPos - second).getDistance()
+                                val last = lastPinchDistance
+                                if (last != null) {
+                                    pinchAccumPx += distance - last
+                                    while (pinchAccumPx >= pinchStepPx) {
+                                        pinchAccumPx -= pinchStepPx
+                                        stepAspectZoomIn()
+                                    }
+                                    while (pinchAccumPx <= -pinchStepPx) {
+                                        pinchAccumPx += pinchStepPx
+                                        stepAspectZoomOut()
+                                    }
+                                }
+                                lastPinchDistance = distance
+                            }
+                        }
                     }
                     // Finger up (or gesture cancelled): settle. Tap,
                     // double-tap and long-press only fire when the down
                     // was NOT consumed (a button/slider owned it).
-                    if (longPressed) {
+                    if (pinched) {
+                        // A pinch is never a tap / double-tap / seek
+                        // settle — just clear the zoom bubble.
+                        overlay = null
+                    } else if (longPressed) {
                         playerVm.restoreSpeed()
                         overlay = null
                     } else if (!locked && !downConsumed) {
@@ -602,6 +721,11 @@ fun VideoPlayerScreen(
                     GestureOverlay.Speed2x -> Text(
                         "2x speed", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold
                     )
+                    is GestureOverlay.Zoom -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.AspectRatio, null, tint = Color.White, modifier = Modifier.size(22.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(current.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
@@ -698,7 +822,7 @@ fun VideoPlayerScreen(
                                 .weight(1f)
                                 .padding(horizontal = 10.dp)
                         )
-                        // Five icons, like the v3 mockup: volume, subtitles,
+                        // Five icons, like the mockup: volume, subtitles,
                         // equalizer, aspect, menu. Everything else lives in
                         // the menu so the bar stays one clean row.
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -779,6 +903,37 @@ fun VideoPlayerScreen(
                                         text = { Text("Video info") },
                                         onClick = { showTopMenu = false; showVideoInfo = true }
                                     )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                when (abState) {
+                                                    PlayerViewModel.ABState.OFF -> "A-B repeat: Off"
+                                                    PlayerViewModel.ABState.A_SET -> "A-B repeat: A set…"
+                                                    PlayerViewModel.ABState.LOOPING -> "A-B repeat: Looping"
+                                                }
+                                            )
+                                        },
+                                        onClick = {
+                                            showTopMenu = false
+                                            if (abRepeatEnabled) {
+                                                playerVm.cycleABRepeat()
+                                            } else {
+                                                Toast.makeText(
+                                                    context,
+                                                    "Enable A-B repeat in Settings > Playback",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Playlist") },
+                                        onClick = { showTopMenu = false; onOpenPlaylist() }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Audio track") },
+                                        onClick = { showTopMenu = false; showAudioSheet = true }
+                                    )
                                 }
                             }
                         }
@@ -787,7 +942,7 @@ fun VideoPlayerScreen(
 
                 // Center transport: one row of five LARGE frosted-glass
                 // circles, evenly spread across the full width, bright
-                // white borders — exactly like the v3 mockup. The play
+                // white borders — exactly like the mockup. The play
                 // button is frosted glass with a gradient triangle,
                 // NOT a solid gradient-filled circle.
                 AnimatedVisibility(
@@ -866,8 +1021,8 @@ fun VideoPlayerScreen(
                     }
                 }
 
-                // Bottom panel: a single glass panel holding the seek row,
-                // one transport row of pills, and one utility row of pills.
+                // Bottom panel: a single glass panel holding the seek row
+                // and one row of six essential pills.
                 GlassCard(
                     radius = 24.dp,
                     modifier = Modifier
@@ -954,12 +1109,12 @@ fun VideoPlayerScreen(
                                 fontWeight = FontWeight.Medium
                             )
                         }
-                        // ONE row of ten small pills, same order as the
-                        // v3 mockup: prev, -10s, +10s, next, speed,
-                        // rotate, lock, audio, playlist, A-B. (The
-                        // mockup's 10th "queue" pill is A-B here, since
-                        // playlist and queue are the same screen in this
-                        // app.) The panel stays short, like the mockup.
+                        // ONE row of six small pills, essentials only:
+                        // prev, play/pause, next, aspect (Fit), speed,
+                        // lock. The -10s/+10s pills live on the center
+                        // row and double-tap; A-B, playlist, audio track
+                        // and rotate live in the top bar ⋯ menu, and
+                        // background play is in that menu too.
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -973,23 +1128,23 @@ fun VideoPlayerScreen(
                             )
                             GlassPillButton(
                                 modifier = Modifier.weight(1f),
-                                text = "-${doubleTapStep}s",
-                                onClick = { playerVm.seekRelative(-doubleTapStep * 1000L) }
-                            )
-                            GlassPillButton(
-                                modifier = Modifier.weight(1f),
-                                text = "+${doubleTapStep}s",
-                                onClick = { playerVm.seekRelative(doubleTapStep * 1000L) }
+                                icon = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.Play,
+                                onClick = { playerVm.togglePlay() }
                             )
                             GlassPillButton(
                                 modifier = Modifier.weight(1f),
                                 icon = Icons.Rounded.SkipNext,
                                 onClick = { playerVm.playNext() }
                             )
+                            GlassPillButton(
+                                modifier = Modifier.weight(1f),
+                                text = aspectLabel(aspect),
+                                onClick = { playerVm.cycleAspect() }
+                            )
                             Box(modifier = Modifier.weight(1f)) {
                                 GlassPillButton(
                                     modifier = Modifier.fillMaxWidth(),
-                                    text = "${speed}x",
+                                    text = if (speed % 1f == 0f) "${speed.toInt()}x" else "${speed}x",
                                     onClick = { showSpeedMenu = true }
                                 )
                                 DropdownMenu(
@@ -1009,43 +1164,8 @@ fun VideoPlayerScreen(
                             }
                             GlassPillButton(
                                 modifier = Modifier.weight(1f),
-                                icon = Icons.Rounded.ScreenRotation,
-                                onClick = { rotate() }
-                            )
-                            GlassPillButton(
-                                modifier = Modifier.weight(1f),
                                 icon = Icons.Rounded.LockOpen,
                                 onClick = { playerVm.setLocked(true) }
-                            )
-                            GlassPillButton(
-                                modifier = Modifier.weight(1f),
-                                icon = Icons.Rounded.Audiotrack,
-                                onClick = { showAudioSheet = true }
-                            )
-                            GlassPillButton(
-                                modifier = Modifier.weight(1f),
-                                icon = Icons.Rounded.PlaylistPlay,
-                                onClick = onOpenPlaylist
-                            )
-                            GlassPillButton(
-                                modifier = Modifier.weight(1f),
-                                text = when (abState) {
-                                    PlayerViewModel.ABState.OFF -> "A-B"
-                                    PlayerViewModel.ABState.A_SET -> "A…"
-                                    PlayerViewModel.ABState.LOOPING -> "A-B ●"
-                                },
-                                enabled = abRepeatEnabled,
-                                onClick = {
-                                    if (abRepeatEnabled) {
-                                        playerVm.cycleABRepeat()
-                                    } else {
-                                        Toast.makeText(
-                                            context,
-                                            "Enable A-B repeat in Settings > Playback",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
-                                }
                             )
                         }
                     }
@@ -1123,7 +1243,7 @@ private fun GlassCircleButton(
     }
 }
 
-/** Small compact glass pill — the ten pills in the bottom panel, one row. */
+/** Small compact glass pill — the six pills in the bottom panel, one row. */
 @Composable
 private fun GlassPillButton(
     modifier: Modifier = Modifier,
@@ -1174,7 +1294,7 @@ private fun GlassPillButton(
 }
 
 /**
- * The play triangle from the v3 mockup: a right-pointing triangle filled
+ * The play triangle from the mockup: a right-pointing triangle filled
  * with the theme's accent gradient, drawn on the frosted-glass play
  * button. (A plain white Icon cannot carry the gradient.)
  */
@@ -1192,6 +1312,13 @@ private fun GradientTriangle(modifier: Modifier = Modifier) {
         }
         drawPath(path = path, brush = brush)
     }
+}
+
+/** Short label for the current aspect, shared by the Fit pill and the pinch-zoom overlay. */
+private fun aspectLabel(aspect: VideoAspect): String = when (aspect) {
+    VideoAspect.FIT -> "Fit"
+    VideoAspect.FILL -> "Fill"
+    VideoAspect.ZOOM -> "Zoom"
 }
 
 private fun subtitleColorValue(name: String): Int = when (name) {

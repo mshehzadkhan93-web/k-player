@@ -175,12 +175,26 @@ fun ArtImage(
  * MediaStore and for remote URLs). The gradient [ArtImage] is used ONLY
  * as a fallback when no frame can be extracted (unsupported file, missing
  * file, decode error).
+ *
+ * Scroll performance: the frame is decoded at exactly the size it is
+ * displayed at ([widthPx] x [heightPx]) instead of full resolution — a
+ * 4K frame decoded for a ~100dp grid cell was the main scroll jank
+ * source — and the request is remembered, so the memory-cache key
+ * (data + size + frame time) stays stable across recompositions and a
+ * decoded frame is reused instead of re-running MediaMetadataRetriever
+ * on every bind while scrolling. The frame is taken at 1s in, so the
+ * thumbnail is a real scene instead of a black first frame.
+ * [widthPx]/[heightPx] defaults cover the 3-column grid (~100dp cells)
+ * and the 128dp list rows; the 220dp-wide Continue/Recent cards pass
+ * the larger size explicitly.
  */
 @Composable
 fun RealThumbnail(
     video: VideoItem,
     modifier: Modifier = Modifier,
-    contentDescription: String? = null
+    contentDescription: String? = null,
+    widthPx: Int = 320,
+    heightPx: Int = 180
 ) {
     var frameFailed by remember(video.id, video.url) { mutableStateOf(false) }
     if (frameFailed) {
@@ -193,11 +207,16 @@ fun RealThumbnail(
         )
         return
     }
-    val request = ImageRequest.Builder(LocalContext.current)
-        .data(video.url)
-        .decoderFactory(VideoFrameDecoder.Factory())
-        .crossfade(true)
-        .build()
+    val context = LocalContext.current
+    val request = remember(video.url, widthPx, heightPx) {
+        ImageRequest.Builder(context)
+            .data(video.url)
+            .decoderFactory(VideoFrameDecoder.Factory())
+            .size(widthPx, heightPx)
+            .parameter(VideoFrameDecoder.VIDEO_FRAME_MICROS_KEY, 1_000_000L)
+            .crossfade(true)
+            .build()
+    }
     AsyncImage(
         model = request,
         contentDescription = contentDescription,

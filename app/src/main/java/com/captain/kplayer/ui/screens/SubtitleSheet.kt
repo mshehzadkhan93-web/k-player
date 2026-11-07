@@ -119,7 +119,7 @@ fun SubtitleSheet(
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
                 )
-                EmbeddedTag()
+                EmbeddedTag(if (track.isExternal) "File" else "Embedded")
                 Spacer(modifier = Modifier.width(8.dp))
                 if (track.selected && !subtitlesDisabled) {
                     Icon(
@@ -296,9 +296,9 @@ fun SheetCycleButton(value: String, onClick: () -> Unit) {
     GlassButton(onClick = onClick, text = value)
 }
 
-/** Small pill marking a track as embedded in the video file. */
+/** Small pill marking a track's source: "Embedded" for tracks inside the video file, "File" for an externally loaded subtitle file. */
 @Composable
-private fun EmbeddedTag() {
+private fun EmbeddedTag(text: String) {
     Box(
         modifier = Modifier
             .border(
@@ -309,7 +309,7 @@ private fun EmbeddedTag() {
             .padding(horizontal = 8.dp, vertical = 3.dp)
     ) {
         Text(
-            text = "Embedded",
+            text = text,
             color = LocalAccent.current.start,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold

@@ -19,6 +19,15 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
  */
 object PlayerFactory {
 
+    /**
+     * ID stamped on the subtitle configuration of an externally loaded
+     * (.srt/.vtt/.ass) file. Media3 propagates a SubtitleConfiguration's
+     * id onto the created text track's Format.id, so
+     * [PlayerViewModel.refreshTrackLists] can tell an external file apart
+     * from the video's embedded subtitle tracks (which carry no such id).
+     */
+    const val EXTERNAL_SUBTITLE_ID = "external-subtitle"
+
     fun buildPlayer(context: Context, decodingMode: String): ExoPlayer {
         val renderersFactory = DefaultRenderersFactory(context).apply {
             // PREFER extension renderers so the FFmpeg audio renderer
@@ -88,6 +97,7 @@ object PlayerFactory {
         mimeType: String
     ): MediaItem {
         val subtitle = MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(subtitleUri))
+            .setId(EXTERNAL_SUBTITLE_ID)
             .setMimeType(mimeType)
             .setLanguage(subtitleLanguage)
             .setSelectionFlags(androidx.media3.common.C.SELECTION_FLAG_DEFAULT)

@@ -49,7 +49,9 @@ data class UiSubtitleTrack(
     val label: String,
     val groupIndex: Int,
     val trackIndex: Int,
-    val selected: Boolean
+    val selected: Boolean,
+    /** True when the track came from an externally loaded subtitle file. */
+    val isExternal: Boolean = false
 )
 
 /**
@@ -659,6 +661,10 @@ class PlayerViewModel(
         }
     }
 
+    fun setAspect(aspect: VideoAspect) {
+        _aspect.value = aspect
+    }
+
     fun setLocked(locked: Boolean) {
         _locked.value = locked
     }
@@ -757,7 +763,11 @@ class PlayerViewModel(
                                 label = languageName(format.language),
                                 groupIndex = groupIndex,
                                 trackIndex = i,
-                                selected = group.isTrackSelected(i)
+                                selected = group.isTrackSelected(i),
+                                // Externally loaded files carry the id
+                                // stamped on in PlayerFactory; embedded
+                                // tracks have no such id.
+                                isExternal = format.id == PlayerFactory.EXTERNAL_SUBTITLE_ID
                             )
                         )
                     }

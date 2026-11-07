@@ -53,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -295,36 +296,50 @@ private fun VideosTab(
     // animates to 0) once the All Videos list scrolls down, so the grid
     // gets the space, and expands again when scrolled back to the top.
     // The scroll state of the active list/grid drives it.
+    // Scroll perf: the collapsed flag is a derivedStateOf, not a plain
+    // read of firstVisibleItemScrollOffset in composition — the offset
+    // changes on every scroll pixel, and reading it directly recomposed
+    // this whole tab (and every visible card) on every pixel scrolled.
+    // derivedStateOf only invalidates when the boolean itself flips.
     val gridState = rememberLazyGridState()
     val listState = rememberLazyListState()
-    val recentCollapsed = if (viewMode == VideoViewMode.GRID) {
-        gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0
-    } else {
-        listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0
+    val recentCollapsed by remember {
+        derivedStateOf {
+            if (viewMode == VideoViewMode.GRID) {
+                gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0
+            } else {
+                listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0
+            }
+        }
     }
     val playVideo: (VideoItem) -> Unit = { video ->
         playerVm.playVideo(video, videos)
         navController.navigate(Routes.PLAYER)
     }
-    val allVideosHeader: @Composable () -> Unit = {
-        AllVideosHeader(
-            filter = filter,
-            onFilterSelected = { libraryVm.setResolutionFilter(it) },
-            viewMode = viewMode,
-            showSortMenu = showSortMenu,
-            onShowSortMenuChange = { showSortMenu = it },
-            onSortSelected = { sort ->
-                libraryVm.setSortMode(sort)
-                settingsVm.setDefaultSort(sort.name.lowercase())
-                showSortMenu = false
-            },
-            onToggleView = {
-                libraryVm.toggleViewMode()
-                settingsVm.setDefaultView(
-                    if (viewMode == VideoViewMode.GRID) "list" else "grid"
-                )
-            }
-        )
+    // Remembered so a VideosTab recomposition (e.g. a scroll-driven
+    // collapse flip) does not hand the header item a new lambda and
+    // force the header to recompose with it.
+    val allVideosHeader: @Composable () -> Unit = remember(filter, viewMode, showSortMenu) {
+        {
+            AllVideosHeader(
+                filter = filter,
+                onFilterSelected = { libraryVm.setResolutionFilter(it) },
+                viewMode = viewMode,
+                showSortMenu = showSortMenu,
+                onShowSortMenuChange = { showSortMenu = it },
+                onSortSelected = { sort ->
+                    libraryVm.setSortMode(sort)
+                    settingsVm.setDefaultSort(sort.name.lowercase())
+                    showSortMenu = false
+                },
+                onToggleView = {
+                    libraryVm.toggleViewMode()
+                    settingsVm.setDefaultView(
+                        if (viewMode == VideoViewMode.GRID) "list" else "grid"
+                    )
+                }
+            )
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -342,7 +357,7 @@ private fun VideosTab(
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(recentlyPlayed, key = { it.id }) { video ->
+                    items(recentlyPlayed, key = { it.id }, contentType = { "recent_card" }) { video ->
                         RecentCard(video) { playVideo(video) }
                     }
                 }
@@ -379,7 +394,7 @@ private fun VideosTab(
                             )
                         }
                     }
-                    items(videos, key = { it.id }) { video ->
+                    items(videos, key = { it.id }, contentType = { "video_card" }) { video ->
                         VideoCard(video) { playVideo(video) }
                     }
                 }
@@ -410,7 +425,7 @@ private fun VideosTab(
                             )
                         }
                     }
-                    items(videos, key = { it.id }) { video ->
+                    items(videos, key = { it.id }, contentType = { "video_row" }) { video ->
                         VideoRow(video) { playVideo(video) }
                     }
                 }
@@ -434,7 +449,7 @@ private fun ContinueWatchingSection(
         )
         Spacer(modifier = Modifier.height(10.dp))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(videos, key = { it.id }) { video ->
+            items(videos, key = { it.id }, contentType = { "continue_card" }) { video ->
                 ContinueCard(video) { onPlay(video) }
             }
         }
@@ -527,6 +542,8 @@ private fun AllVideosHeader(
 
 @Composable
 private fun VideoCard(video: VideoItem, onClick: () -> Unit) {
+    // Formatted once — the duration text is shown twice (badge + subtitle).
+    val durationText = formatDuration(video.durationMs)
     GlassCard(modifier = Modifier.fillMaxWidth(), onClick = onClick) {
         Box {
             RealThumbnail(
@@ -539,7 +556,7 @@ private fun VideoCard(video: VideoItem, onClick: () -> Unit) {
                 modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
             )
             Badge(
-                text = formatDuration(video.durationMs),
+                text = durationText,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
             )
         }
@@ -554,7 +571,7 @@ private fun VideoCard(video: VideoItem, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = "${video.genre} • ${formatDuration(video.durationMs)}",
+                text = "${video.genre} • $durationText",
                 color = TextSecondary,
                 fontSize = 11.sp,
                 maxLines = 1,
@@ -622,7 +639,9 @@ private fun ContinueCard(video: VideoItem, onClick: () -> Unit) {
         Box {
             RealThumbnail(
                 video = video,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                widthPx = 480,
+                heightPx = 270
             )
             Badge(
                 text = formatDuration(video.durationMs),
@@ -656,7 +675,9 @@ private fun RecentCard(video: VideoItem, onClick: () -> Unit) {
         Box {
             RealThumbnail(
                 video = video,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                widthPx = 480,
+                heightPx = 270
             )
             Badge(
                 text = formatDuration(video.durationMs),
@@ -708,7 +729,7 @@ private fun MusicTab(
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(vertical = 4.dp, horizontal = 0.dp)
     ) {
-        items(tracks, key = { it.id }) { track ->
+        items(tracks, key = { it.id }, contentType = { "track_row" }) { track ->
             GlassCard(
                 modifier = Modifier.fillMaxWidth(),
                 onClick = {
@@ -833,7 +854,7 @@ private fun FoldersTab(libraryVm: LibraryViewModel, navController: NavHostContro
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(vertical = 4.dp)
     ) {
-        items(folders, key = { it.name }) { folder ->
+        items(folders, key = { it.name }, contentType = { "folder_row" }) { folder ->
             GlassCard(
                 modifier = Modifier.fillMaxWidth(),
                 onClick = { navController.navigate(Routes.folderRoute(folder.path)) }
@@ -969,7 +990,7 @@ private fun NetworkTab(
         )
         Spacer(modifier = Modifier.height(10.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(streams, key = { it.url }) { stream ->
+            items(streams, key = { it.url }, contentType = { "stream_row" }) { stream ->
                 GlassCard(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = {

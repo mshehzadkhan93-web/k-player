@@ -2,12 +2,20 @@ package com.captain.kplayer.data
 
 /**
  * Sample library data so every screen works out of the box without real files.
- * Sample videos use Google's public sample bucket; sample audio uses the
- * public SoundHelix samples. Both are stable, freely usable test media.
+ * Sample videos use the W3C, Blender (via archive.org) and test-videos.co.uk
+ * public samples; sample audio uses the public SoundHelix samples. Every URL
+ * below was verified live (HTTP 200 + video/audio content-type, durations
+ * probed with ffprobe) on 2026-11-07. NOTE: Google's gtv-videos-bucket
+ * (commondatastorage.googleapis.com/gtv-videos-bucket/sample) now answers
+ * 403 AccessDenied to anonymous callers — no sample may point at it.
+ * Sizes, durations, resolutions and bitrates below are the real values of
+ * the files served at those URLs, not the old bucket's.
  */
 object SampleData {
 
-    private const val VIDEO_BUCKET = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample"
+    private const val W3C_BUCKET = "https://media.w3.org/2010/05"
+    private const val ARCHIVE = "https://archive.org/download"
+    private const val TEST_VIDEOS = "https://test-videos.co.uk/vids"
 
     val videos: List<VideoItem> = listOf(
         VideoItem(
@@ -15,14 +23,14 @@ object SampleData {
             title = "Big Buck Bunny",
             genre = "Animation • Comedy",
             durationMs = 596_000L,
-            resolution = "4K",
-            url = "$VIDEO_BUCKET/BigBuckBunny.mp4",
+            resolution = "HD",
+            url = "$W3C_BUCKET/bunny/movie.mp4",
             thumbKey = "bbb",
-            sizeText = "1.2 GB",
-            sizeBytes = 1288490189L,
+            sizeText = "238 MB",
+            sizeBytes = 249224577L,
             dateAddedMs = 1793932800000L,
             codec = "H.264 / AAC",
-            bitrateText = "16.5 Mbps",
+            bitrateText = "3.3 Mbps",
             fps = 24,
             audioTracks = listOf(
                 AudioTrackInfo("English", "AAC", "5.1", isDefault = true),
@@ -40,14 +48,14 @@ object SampleData {
             title = "Sintel",
             genre = "Fantasy • Drama",
             durationMs = 888_000L,
-            resolution = "4K",
-            url = "$VIDEO_BUCKET/Sintel.mp4",
+            resolution = "HD",
+            url = "$ARCHIVE/Sintel/sintel-2048-stereo_512kb.mp4",
             thumbKey = "sintel",
-            sizeText = "1.8 GB",
-            sizeBytes = 1932735283L,
+            sizeText = "74 MB",
+            sizeBytes = 77410288L,
             dateAddedMs = 1793846400000L,
             codec = "H.264 / AAC",
-            bitrateText = "18.2 Mbps",
+            bitrateText = "0.7 Mbps",
             fps = 24,
             audioTracks = listOf(
                 AudioTrackInfo("English", "AAC", "5.1", isDefault = true),
@@ -66,14 +74,14 @@ object SampleData {
             title = "Tears of Steel",
             genre = "Sci-Fi • Action",
             durationMs = 734_000L,
-            resolution = "4K",
-            url = "$VIDEO_BUCKET/TearsOfSteel.mp4",
+            resolution = "HD",
+            url = "$ARCHIVE/Tears-of-Steel/tears_of_steel_720p.mp4",
             thumbKey = "tos",
-            sizeText = "1.5 GB",
-            sizeBytes = 1610612736L,
+            sizeText = "73 MB",
+            sizeBytes = 76435802L,
             dateAddedMs = 1793760000000L,
             codec = "H.265 / AAC",
-            bitrateText = "17.8 Mbps",
+            bitrateText = "0.8 Mbps",
             fps = 24,
             audioTracks = listOf(
                 AudioTrackInfo("English", "AAC", "5.1", isDefault = true),
@@ -87,15 +95,16 @@ object SampleData {
             id = "ed",
             title = "Elephants Dream",
             genre = "Surreal • Animation",
-            durationMs = 653_000L,
+            durationMs = 654_000L,
             resolution = "HD",
-            url = "$VIDEO_BUCKET/ElephantsDream.mp4",
+            // File name contains a space; %20 is required in the URL.
+            url = "$ARCHIVE/elephants-dream_202403/Elephants%20Dream.mp4",
             thumbKey = "ed",
-            sizeText = "890 MB",
-            sizeBytes = 933232640L,
+            sizeText = "74 MB",
+            sizeBytes = 78106846L,
             dateAddedMs = 1793673600000L,
             codec = "H.264 / AAC",
-            bitrateText = "11.4 Mbps",
+            bitrateText = "1.0 Mbps",
             fps = 24,
             audioTracks = listOf(
                 AudioTrackInfo("English", "AAC", "Stereo", isDefault = true)
@@ -106,18 +115,18 @@ object SampleData {
             resumeMs = 96_000L
         ),
         VideoItem(
-            id = "blaze",
-            title = "For Bigger Blazes",
-            genre = "Short • Promo",
-            durationMs = 15_000L,
+            id = "jelly",
+            title = "Jellyfish",
+            genre = "Nature • Ocean",
+            durationMs = 10_000L,
             resolution = "HD",
-            url = "$VIDEO_BUCKET/ForBiggerBlazes.mp4",
-            thumbKey = "blaze",
-            sizeText = "4 MB",
-            sizeBytes = 4194304L,
+            url = "$TEST_VIDEOS/jellyfish/mp4/h264/1080/Jellyfish_1080_10s_1MB.mp4",
+            thumbKey = "jelly",
+            sizeText = "1 MB",
+            sizeBytes = 1048435L,
             dateAddedMs = 1793587200000L,
             codec = "H.264 / AAC",
-            bitrateText = "2.1 Mbps",
+            bitrateText = "0.8 Mbps",
             fps = 30,
             audioTracks = listOf(
                 AudioTrackInfo("English", "AAC", "Stereo", isDefault = true)
@@ -125,57 +134,57 @@ object SampleData {
             subtitleTracks = emptyList()
         ),
         VideoItem(
-            id = "escape",
-            title = "For Bigger Escapes",
-            genre = "Short • Promo",
-            durationMs = 15_000L,
+            id = "bbb10",
+            title = "Big Buck Bunny (10s Clip)",
+            genre = "Animation • Comedy",
+            durationMs = 10_000L,
             resolution = "HD",
-            url = "$VIDEO_BUCKET/ForBiggerEscapes.mp4",
-            thumbKey = "escape",
-            sizeText = "4 MB",
-            sizeBytes = 4194304L,
+            url = "$TEST_VIDEOS/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_1MB.mp4",
+            thumbKey = "bbb10",
+            sizeText = "1 MB",
+            sizeBytes = 1046987L,
             dateAddedMs = 1793500800000L,
             codec = "H.264 / AAC",
-            bitrateText = "2.0 Mbps",
-            fps = 30,
+            bitrateText = "0.8 Mbps",
+            fps = 60,
             audioTracks = listOf(
                 AudioTrackInfo("English", "AAC", "Stereo", isDefault = true)
             ),
             subtitleTracks = emptyList()
         ),
         VideoItem(
-            id = "fun",
-            title = "For Bigger Fun",
-            genre = "Short • Promo",
-            durationMs = 60_000L,
+            id = "sintel10",
+            title = "Sintel (10s Clip)",
+            genre = "Fantasy • Drama",
+            durationMs = 10_000L,
             resolution = "HD",
-            url = "$VIDEO_BUCKET/ForBiggerFun.mp4",
-            thumbKey = "fun",
-            sizeText = "18 MB",
-            sizeBytes = 18874368L,
+            url = "$TEST_VIDEOS/sintel/mp4/h264/720/Sintel_720_10s_1MB.mp4",
+            thumbKey = "sintel10",
+            sizeText = "1 MB",
+            sizeBytes = 1047954L,
             dateAddedMs = 1793414400000L,
             codec = "H.264 / AAC",
-            bitrateText = "2.4 Mbps",
-            fps = 30,
+            bitrateText = "0.8 Mbps",
+            fps = 24,
             audioTracks = listOf(
                 AudioTrackInfo("English", "AAC", "Stereo", isDefault = true)
             ),
             subtitleTracks = emptyList()
         ),
         VideoItem(
-            id = "joyride",
-            title = "For Bigger Joyrides",
-            genre = "Short • Promo",
-            durationMs = 15_000L,
+            id = "bbtrailer",
+            title = "Big Buck Bunny (Trailer)",
+            genre = "Animation • Comedy",
+            durationMs = 33_000L,
             resolution = "HD",
-            url = "$VIDEO_BUCKET/ForBiggerJoyrides.mp4",
-            thumbKey = "joyride",
-            sizeText = "4 MB",
-            sizeBytes = 4194304L,
+            url = "$W3C_BUCKET/bunny/trailer.mp4",
+            thumbKey = "bbtrailer",
+            sizeText = "11 MB",
+            sizeBytes = 11053871L,
             dateAddedMs = 1793328000000L,
             codec = "H.264 / AAC",
-            bitrateText = "2.0 Mbps",
-            fps = 30,
+            bitrateText = "2.7 Mbps",
+            fps = 25,
             audioTracks = listOf(
                 AudioTrackInfo("English", "AAC", "Stereo", isDefault = true)
             ),

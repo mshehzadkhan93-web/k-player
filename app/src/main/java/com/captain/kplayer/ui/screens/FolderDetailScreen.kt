@@ -110,7 +110,7 @@ fun FolderDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     contentPadding = PaddingValues(bottom = 8.dp)
                 ) {
-                    items(videos, key = { it.id }) { video ->
+                    items(videos, key = { it.id }, contentType = { "video_row" }) { video ->
                         FolderVideoRow(video) {
                             playerVm.playVideo(video, videos)
                             navController.navigate(Routes.PLAYER)
