@@ -34,6 +34,14 @@ on:
 #  - The extension is AUDIO-only (FfmpegAudioRenderer): it decodes DTS /
 #    DTS-HD / TrueHD / AC3 / E-AC3 etc. Video still decodes via MediaCodec;
 #    MKV containers are handled by ExoPlayer's built-in Matroska extractor.
+#  - RUN #16 LESSON: the jni/ffmpeg SYMLINK must be created on EVERY run,
+#    including cache hits. The extension's build.gradle only configures
+#    its CMake native build when src/main/jni/ffmpeg exists — without the
+#    symlink the AAR builds Java-only with NO native libs, the "Copy AAR"
+#    step still succeeds (the file exists), and the app loads the FFmpeg
+#    renderer by reflection so the missing libs fail SILENTLY. Run #16's
+#    APK had no libffmpegJNI.so at all. The symlink step and the AAR/APK
+#    verification steps below exist to make this impossible to miss again.
 #  - First build takes ~20-30 min (FFmpeg x4 ABIs + extension AAR). The
 #    FFmpeg source + built libs are cached between runs (see cache step).
 env:
@@ -113,6 +121,16 @@ jobs:
 
       - name: Build FFmpeg for Android (all 4 ABIs)
         run: |
+          # The extension's build.gradle only configures its native
+          # (CMake) build when src/main/jni/ffmpeg exists — so the
+          # symlink MUST be created on EVERY run, including cache hits,
+          # or the AAR is silently built Java-only with no native libs
+          # (run #16: cache hit, no symlink, APK had no FFmpeg at all).
+          # The media checkout is fresh each run, so the symlink never
+          # survives between runs. It may dangle briefly on a cache
+          # miss until the clone below runs — that is fine.
+          ln -sfn "$GITHUB_WORKSPACE/ffmpeg-src" \
+            "$GITHUB_WORKSPACE/media/libraries/decoder_ffmpeg/src/main/jni/ffmpeg"
           # Skip the expensive build when the cache already holds built libs.
           if [ -f "ffmpeg-src/android-libs/arm64-v8a/libavcodec.a" ] && \
              [ -f "ffmpeg-src/android-libs/armeabi-v7a/libavcodec.a" ]; then
@@ -122,10 +140,6 @@ jobs:
               git clone --depth 1 --branch "$FFMPEG_BRANCH" \
                 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
             fi
-            # build_ffmpeg.sh expects the FFmpeg source symlinked as
-            # libraries/decoder_ffmpeg/src/main/jni/ffmpeg
-            ln -sfn "$GITHUB_WORKSPACE/ffmpeg-src" \
-              "$GITHUB_WORKSPACE/media/libraries/decoder_ffmpeg/src/main/jni/ffmpeg"
             cd "$GITHUB_WORKSPACE/media/libraries/decoder_ffmpeg/src/main/jni"
             ./build_ffmpeg.sh \
               "$GITHUB_WORKSPACE/media/libraries/decoder_ffmpeg/src/main" \
@@ -153,12 +167,34 @@ jobs:
           mkdir -p app/libs
           cp "$AAR" app/libs/lib-decoder-ffmpeg-release.aar
           ls -lh app/libs/
+          # The AAR MUST contain the native FFmpeg libs — if the jni
+          # symlink was missing, the extension builds Java-only and the
+          # app silently loses all-format audio (run #16). Fail loudly.
+          if ! unzip -l app/libs/lib-decoder-ffmpeg-release.aar | grep -q "libffmpegJNI.so"; then
+            echo "::error::AAR has no libffmpegJNI.so — native build was skipped (missing jni/ffmpeg symlink?)"
+            unzip -l app/libs/lib-decoder-ffmpeg-release.aar
+            exit 1
+          fi
+          echo "AAR verified: contains libffmpegJNI.so"
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
+
+      - name: Verify APK contains FFmpeg libs
+        run: |
+          # Same silent-failure guard at the APK level: the app loads
+          # the FFmpeg renderer by reflection, so a missing native lib
+          # would only show up as "no DTS audio" on the phone. Fail
+          # the build instead.
+          if ! unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q "libffmpegJNI.so"; then
+            echo "::error::APK has no libffmpegJNI.so — FFmpeg extension was not linked in"
+            unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -E "\.so" | head -20
+            exit 1
+          fi
+          echo "APK verified: contains libffmpegJNI.so"
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
