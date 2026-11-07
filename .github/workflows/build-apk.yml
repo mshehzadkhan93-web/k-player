@@ -15,8 +15,17 @@ on:
 #    (NOT extensions/ffmpeg — that path does not exist at 1.2.1) and its
 #    Gradle project is :lib-decoder-ffmpeg.
 #  - libraries/decoder_ffmpeg/README.md: FFmpeg 6.0 (branch release/6.0) is
-#    the recommended version; NDK r26b is the tested NDK; ANDROID_ABI is
-#    typically the app's minSdk (26 here) and must not exceed it.
+#    the recommended version. HOWEVER the NDK and API level used to build
+#    FFmpeg MUST match the ones the extension's own CMake build uses:
+#    the media project's build config pins NDK 25.1.8937393 and links the
+#    JNI .so for android21 (media library minSdk 21) — proven by run #10,
+#    where AGP installed NDK 25.1.8937393 itself and linked with
+#    `--target=aarch64-none-linux-android21`. Building FFmpeg with NDK r26b
+#    / API 26 instead fails the link with `ld: error: undefined symbol:
+#    stderr` (libavutil/log.c). So NDK_VERSION and ANDROID_ABI below are
+#    25.1.8937393 / 21 ON PURPOSE — do not "upgrade" them to r26b / 26.
+#    The cache key includes both values so a stale build can never be
+#    restored after changing them.
 #  - build_ffmpeg.sh takes (FFMPEG_MODULE_PATH, NDK_PATH, HOST_PLATFORM,
 #    ANDROID_ABI, ENABLED_DECODERS...) and builds ALL FOUR ABIs in one run
 #    (armeabi-v7a, arm64-v8a, x86, x86_64) — there is no per-ABI flag.
@@ -30,8 +39,8 @@ on:
 env:
   MEDIA3_TAG: "1.2.1"
   FFMPEG_BRANCH: release/6.0
-  NDK_VERSION: 26.1.10909125 # NDK r26b — tested version per decoder_ffmpeg README
-  ANDROID_ABI: "26" # == app minSdk 26
+  NDK_VERSION: 25.1.8937393 # MUST match the media project's pinned NDK (see header comment)
+  ANDROID_ABI: "21" # MUST match the extension link target android21 (media minSdk 21)
   # FFmpeg decoder names for the codecs K-Player must play: dca = DTS/DTS-HD,
   # truehd/mlp = TrueHD, ac3/eac3 = Dolby Digital/Digital Plus, plus common audio.
   ENABLED_DECODERS: "ac3 eac3 dca truehd mlp aac mp3float vorbis opus flac alac"
@@ -68,7 +77,7 @@ jobs:
           echo "ANDROID_SDK_ROOT=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
           ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools"
 
-      - name: Install NDK r26b and CMake
+      - name: Install NDK and CMake
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           [ -x "$SDKMANAGER" ] || SDKMANAGER="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -1)"
@@ -91,12 +100,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ffmpeg-src
-          # Keyed on the FFmpeg branch, the decoder list and the exact
-          # build_ffmpeg.sh from the media checkout, so any of those
-          # changing forces a rebuild.
-          key: ffmpeg-6.0-ac3-eac3-dca-truehd-mlp-aac-mp3float-vorbis-opus-flac-alac-${{ hashFiles('media/libraries/decoder_ffmpeg/src/main/jni/build_ffmpeg.sh') }}
+          # Keyed on the NDK version, API level, FFmpeg branch, decoder
+          # list and the exact build_ffmpeg.sh, so any of those changing
+          # forces a rebuild. The NDK/API MUST be in the key: libs built
+          # with a different NDK/API are link-incompatible (run #10:
+          # r26b/API26 libs failed the NDK 25/API21 link with
+          # `undefined symbol: stderr`), and a restore-key prefix must
+          # never match a cache built with different values.
+          key: ffmpeg-6.0-ndk25.1.8937393-api21-ac3-eac3-dca-truehd-mlp-aac-mp3float-vorbis-opus-flac-alac-${{ hashFiles('media/libraries/decoder_ffmpeg/src/main/jni/build_ffmpeg.sh') }}
           restore-keys: |
-            ffmpeg-6.0-
+            ffmpeg-6.0-ndk25.1.8937393-api21-
 
       - name: Build FFmpeg for Android (all 4 ABIs)
         run: |
