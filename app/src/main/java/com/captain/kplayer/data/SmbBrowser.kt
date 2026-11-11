@@ -2,9 +2,9 @@ package com.captain.kplayer.data
 
 import android.content.Context
 import jcifs.CIFSException
+import jcifs.CIFSContext
 import jcifs.config.PropertyConfiguration
 import jcifs.context.BaseContext
-import jcifs.context.CIFSContext
 import jcifs.smb.NtlmPasswordAuthenticator
 import jcifs.smb.SmbFile
 import kotlinx.coroutines.Dispatchers
@@ -53,7 +53,11 @@ class SmbBrowser {
         props.setProperty("jcifs.smb.client.maxVersion", "SMB311")
         val base = BaseContext(PropertyConfiguration(props))
         return if (user.isBlank() && password.isBlank()) {
-            base.withCredentials(NtlmPasswordAuthenticator.ANONYMOUS)
+            // No credentials attached: a context without credentials
+            // logs on anonymously (guest). jcifs-ng 2.x has no
+            // NtlmPasswordAuthenticator.ANONYMOUS constant — the
+            // default (credential-less) context is the anonymous one.
+            base
         } else {
             base.withCredentials(NtlmPasswordAuthenticator(null, user, password))
         }

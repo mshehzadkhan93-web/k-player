@@ -3,7 +3,7 @@ package com.captain.kplayer.player
 import android.content.Context
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
-import androidx.media3.common.audio.AudioFormat
+import androidx.media3.common.audio.AudioProcessor.AudioFormat
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
@@ -152,7 +152,7 @@ object PlayerFactory {
      *
      * This is the highest-risk new code in the PLAYER package: it was
      * written against the Media3 1.2.1 BaseAudioProcessor contract
-     * (onConfigure / onQueueInput / onQueueEndOfStream / onFlush / onReset
+     * (onConfigure / queueInput / onQueueEndOfStream / onFlush / onReset
      * / replaceOutputBuffer) but could NOT be compiled or run in this
      * sandbox — it needs the CI build plus a device check (delay +250ms
      * and -250ms on a real video) before it is trusted.
@@ -193,7 +193,7 @@ object PlayerFactory {
             return inputAudioFormat
         }
 
-        override fun onQueueInput(inputBuffer: ByteBuffer) {
+        override fun queueInput(inputBuffer: ByteBuffer) {
             if (!inputBuffer.hasRemaining()) return
             // Negative delay: drop the leading bytes of the stream after
             // each flush (seek / track change restarts the drop).

@@ -5,7 +5,7 @@ import androidx.media3.common.C
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
-import jcifs.context.CIFSContext
+import jcifs.CIFSContext
 import jcifs.smb.SmbFile
 import java.io.IOException
 import java.io.InputStream
@@ -113,14 +113,12 @@ class SmbDataSource(
 
     // Transfer listeners are accepted (the DataSource contract) but not
     // notified: their callback signatures changed across Media3 versions
-    // and bandwidth tracking is not needed for LAN playback.
+    // and bandwidth tracking is not needed for LAN playback. There is
+    // no removeTransferListener in Media3 1.2.1's DataSource interface
+    // (only addTransferListener), so none is declared here.
 
     override fun addTransferListener(transferListener: TransferListener) {
         transferListeners.add(transferListener)
-    }
-
-    override fun removeTransferListener(transferListener: TransferListener) {
-        transferListeners.remove(transferListener)
     }
 }
 
