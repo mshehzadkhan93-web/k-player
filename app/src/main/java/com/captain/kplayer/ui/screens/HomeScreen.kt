@@ -1465,8 +1465,8 @@ private fun NetworkTab(
 private fun MenuRow(
     icon: ImageVector,
     text: String,
-    onClick: () -> Unit,
-    danger: Boolean = false
+    danger: Boolean = false,
+    onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier

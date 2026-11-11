@@ -284,6 +284,9 @@ fun BassKnob(
     val accent = LocalAccent.current
     val sweep = 270f
     val startAngle = 135f
+    // Hoisted out of the Canvas draw scope below: MaterialTheme.colorScheme
+    // is a @Composable read and cannot be called from a DrawScope lambda.
+    val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
     Box(
         modifier = Modifier
             .size(96.dp)
@@ -306,7 +309,7 @@ fun BassKnob(
     ) {
         Canvas(modifier = Modifier.size(96.dp)) {
             drawArc(
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
+                color = trackColor,
                 startAngle = startAngle,
                 sweepAngle = sweep,
                 useCenter = false,
