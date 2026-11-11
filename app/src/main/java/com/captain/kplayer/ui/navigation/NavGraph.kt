@@ -8,6 +8,7 @@ import androidx.navigation.compose.composable
 import com.captain.kplayer.ui.screens.FolderDetailScreen
 import com.captain.kplayer.ui.screens.HomeScreen
 import com.captain.kplayer.ui.screens.MusicPlayerScreen
+import com.captain.kplayer.ui.screens.NetworkScreen
 import com.captain.kplayer.ui.screens.PlaylistScreen
 import com.captain.kplayer.ui.screens.SettingsScreen
 import com.captain.kplayer.ui.screens.SplashScreen
@@ -22,6 +23,7 @@ object Routes {
     const val PLAYER = "player"
     const val MUSIC = "music"
     const val PLAYLIST = "playlist"
+    const val NETWORK = "network"
     const val SETTINGS = "settings"
     const val FOLDER = "folder/{encodedPath}"
 
@@ -72,6 +74,13 @@ fun NavGraph(
         }
         composable(Routes.PLAYLIST) {
             PlaylistScreen(navController = navController, playerVm = playerVm)
+        }
+        composable(Routes.NETWORK) {
+            NetworkScreen(
+                navController = navController,
+                libraryVm = libraryVm,
+                playerVm = playerVm
+            )
         }
         composable(Routes.SETTINGS) {
             SettingsScreen(

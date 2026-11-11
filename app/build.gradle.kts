@@ -14,8 +14,8 @@ android {
         applicationId = "com.captain.kplayer"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.4"
+        versionCode = 6
+        versionName = "2.0"
     }
 
     buildFeatures {
@@ -72,6 +72,8 @@ dependencies {
     implementation("androidx.media3:media3-decoder:1.2.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-video:2.7.0")
+    // SMB streaming (SmbBrowser / SmbDataSource): jcifs-ng for smb:// access.
+    implementation("eu.agno3.jcifs:jcifs-ng:2.1.9")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

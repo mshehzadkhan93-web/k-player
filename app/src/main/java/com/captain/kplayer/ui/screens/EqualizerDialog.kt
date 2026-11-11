@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -40,8 +41,8 @@ import com.captain.kplayer.player.EqualizerManager
 import com.captain.kplayer.ui.components.GlassButton
 import com.captain.kplayer.ui.components.GlassDialog
 import com.captain.kplayer.ui.theme.LocalAccent
-import com.captain.kplayer.ui.theme.TextPrimary
-import com.captain.kplayer.ui.theme.TextSecondary
+import com.captain.kplayer.ui.theme.LocalTextPrimary
+import com.captain.kplayer.ui.theme.LocalTextSecondary
 import com.captain.kplayer.viewmodel.PlayerViewModel
 import kotlin.math.atan2
 
@@ -59,9 +60,32 @@ fun EqualizerDialog(
     val manager by playerVm.equalizerManager.collectAsState()
     val eqEnabled by playerVm.equalizerEnabled.collectAsState()
     val preset by playerVm.equalizerPreset.collectAsState()
+    val passthrough by playerVm.audioPassthrough.collectAsState()
     var showPresets by remember { mutableStateOf(false) }
-    var bandLevels by remember { mutableStateOf(listOf(0f, 0f, 0f, 0f, 0f)) }
-    var bassStrength by remember { mutableStateOf(0) }
+    // Slider/knob state mirrors the manager, keyed on the manager
+    // instance: reopening the dialog (or a manager rebuild after an
+    // audio-session change) shows the levels actually in effect
+    // instead of resetting the sliders to 0. Previously the dialog
+    // always started at 0 dB / 0% even when the EQ was active.
+    val mgr = manager
+    var bandLevels by remember(mgr) { mutableStateOf(mgr?.bandLevels ?: listOf(0f, 0f, 0f, 0f, 0f)) }
+    var bassStrength by remember(mgr) { mutableStateOf(mgr?.bassBoostStrength ?: 0) }
+    // Set when the user drags a slider by hand: the shown preset no
+    // longer matches the levels, so the label reads "Custom" until
+    // another preset is picked.
+    var customPreset by remember { mutableStateOf(false) }
+    // The stored preset name predates the rename ("Normal" is now
+    // "Flat"); show the current name.
+    val presetLabel =
+        if (customPreset) "Custom" else EqualizerManager.displayPresetName(preset)
+    // Moving a slider while the EQ is switched off used to change
+    // numbers on screen while the audio stayed flat — the effect was
+    // disabled. Turning it on with the first adjustment makes the
+    // change audible. Passthrough bypasses all DSP, so there the
+    // switch is left alone and a note explains why nothing changes.
+    fun ensureEnabled() {
+        if (!eqEnabled && !passthrough) playerVm.setEqualizerEnabled(true)
+    }
 
     GlassDialog(onDismiss = onDismiss) {
         Column(modifier = Modifier.padding(20.dp)) {
@@ -71,7 +95,7 @@ fun EqualizerDialog(
             ) {
                 Text(
                     text = "Equalizer",
-                    color = TextPrimary,
+                    color = LocalTextPrimary.current,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
@@ -88,12 +112,20 @@ fun EqualizerDialog(
             if (manager == null || manager?.supported == false) {
                 Text(
                     text = "Audio effects are not available on this device.",
-                    color = TextSecondary,
+                    color = LocalTextSecondary.current,
                     fontSize = 14.sp,
                     modifier = Modifier.padding(top = 12.dp)
                 )
             } else {
                 val mgr = manager!!
+                if (passthrough) {
+                    Text(
+                        text = "Audio passthrough is on — the equalizer and bass boost are bypassed so the raw bitstream reaches the receiver untouched.",
+                        color = LocalTextSecondary.current,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
+                }
                 // Presets.
                 Row(
                     modifier = Modifier
@@ -103,14 +135,14 @@ fun EqualizerDialog(
                 ) {
                     Text(
                         text = "Preset",
-                        color = TextSecondary,
+                        color = LocalTextSecondary.current,
                         fontSize = 14.sp,
                         modifier = Modifier.weight(1f)
                     )
                     Box {
                         GlassButton(
                             onClick = { showPresets = true },
-                            text = preset
+                            text = presetLabel
                         )
                         DropdownMenu(
                             expanded = showPresets,
@@ -123,6 +155,8 @@ fun EqualizerDialog(
                                         playerVm.applyEqualizerPreset(name)
                                         bandLevels =
                                             EqualizerManager.PRESETS.getValue(name)
+                                        customPreset = false
+                                        ensureEnabled()
                                         showPresets = false
                                     }
                                 )
@@ -152,6 +186,8 @@ fun EqualizerDialog(
                                         bandLevels = bandLevels.toMutableList().also {
                                             it[index] = value
                                         }
+                                        customPreset = true
+                                        ensureEnabled()
                                         playerVm.setEqualizerBand(freqHz, value)
                                     },
                                     valueRange = -15f..15f,
@@ -171,12 +207,12 @@ fun EqualizerDialog(
                                 } else {
                                     "${bandLevels[index].toInt()} dB"
                                 },
-                                color = TextSecondary,
+                                color = LocalTextSecondary.current,
                                 fontSize = 11.sp
                             )
                             Text(
                                 text = freqLabel(freqHz),
-                                color = TextPrimary,
+                                color = LocalTextPrimary.current,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium,
                                 modifier = Modifier.padding(top = 2.dp)
@@ -195,13 +231,13 @@ fun EqualizerDialog(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Bass Boost",
-                            color = TextPrimary,
+                            color = LocalTextPrimary.current,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Medium
                         )
                         Text(
                             text = "Drag the knob to boost low frequencies",
-                            color = TextSecondary,
+                            color = LocalTextSecondary.current,
                             fontSize = 13.sp
                         )
                     }
@@ -209,6 +245,7 @@ fun EqualizerDialog(
                         strength = bassStrength,
                         onStrengthChange = { value ->
                             bassStrength = value
+                            ensureEnabled()
                             playerVm.setBassBoost(value)
                         }
                     )
@@ -227,7 +264,11 @@ fun EqualizerDialog(
 }
 
 private fun freqLabel(freqHz: Int): String = when {
-    freqHz >= 1000 -> "${freqHz / 1000}.${(freqHz % 1000) / 100}kHz"
+    freqHz >= 1000 -> {
+        val whole = freqHz / 1000
+        val tenth = (freqHz % 1000) / 100
+        if (tenth == 0) "${whole}kHz" else "$whole.$tenth" + "kHz"
+    }
     else -> "${freqHz}Hz"
 }
 
@@ -265,7 +306,7 @@ fun BassKnob(
     ) {
         Canvas(modifier = Modifier.size(96.dp)) {
             drawArc(
-                color = Color.White.copy(alpha = 0.2f),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
                 startAngle = startAngle,
                 sweepAngle = sweep,
                 useCenter = false,
@@ -281,7 +322,7 @@ fun BassKnob(
         }
         Text(
             text = "$strength%",
-            color = TextPrimary,
+            color = LocalTextPrimary.current,
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold
         )

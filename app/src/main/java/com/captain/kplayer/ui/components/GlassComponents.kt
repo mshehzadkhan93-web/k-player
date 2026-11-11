@@ -64,9 +64,9 @@ import androidx.compose.ui.window.Dialog
 import com.captain.kplayer.ui.theme.LocalAccent
 import com.captain.kplayer.ui.theme.LocalGlassAlpha
 import com.captain.kplayer.ui.theme.LocalTheme
-import com.captain.kplayer.ui.theme.TextMuted
-import com.captain.kplayer.ui.theme.TextPrimary
-import com.captain.kplayer.ui.theme.TextSecondary
+import com.captain.kplayer.ui.theme.LocalTextMuted
+import com.captain.kplayer.ui.theme.LocalTextPrimary
+import com.captain.kplayer.ui.theme.LocalTextSecondary
 
 /** Bottom navigation tabs on the Home screen. */
 enum class HomeTab { VIDEOS, MUSIC, FOLDERS, NETWORK, SETTINGS }
@@ -96,31 +96,40 @@ private fun glassBrush(alpha: Float, tint: Color = Color.White): Brush {
  * bottom, and a thin light highlight line drawn along the top edge —
  * the three layers together are what make the surface read as glass
  * instead of a flat translucent box.
+ *
+ * Performance: the inner-border brush is remembered per shape, so a
+ * recomposition (e.g. a progress tick while a list scrolls) does not
+ * allocate new Brush objects; only the draw pass re-runs, which is
+ * what actually paints. The top highlight is drawn in the draw pass
+ * itself and costs one line — no blur, no offscreen layer.
  */
+@Composable
 private fun Modifier.glassEdge(shape: RoundedCornerShape): Modifier {
+    val edgeBrush = remember(shape) {
+        Brush.verticalGradient(
+            listOf(
+                Color.White.copy(alpha = 0.22f),
+                Color.White.copy(alpha = 0.02f)
+            )
+        )
+    }
+    val highlightBrush = remember {
+        Brush.horizontalGradient(
+            listOf(
+                Color.Transparent,
+                Color.White.copy(alpha = 0.55f),
+                Color.Transparent
+            )
+        )
+    }
     return this
         .border(1.dp, Color.White.copy(alpha = 0.45f), shape)
-        .border(
-            1.dp,
-            Brush.verticalGradient(
-                listOf(
-                    Color.White.copy(alpha = 0.22f),
-                    Color.White.copy(alpha = 0.02f)
-                )
-            ),
-            shape
-        )
+        .border(1.dp, edgeBrush, shape)
         .drawWithContent {
             drawContent()
             val y = 1.5.dp.toPx()
             drawLine(
-                brush = Brush.horizontalGradient(
-                    listOf(
-                        Color.Transparent,
-                        Color.White.copy(alpha = 0.55f),
-                        Color.Transparent
-                    )
-                ),
+                brush = highlightBrush,
                 start = Offset(size.width * 0.08f, y),
                 end = Offset(size.width * 0.92f, y),
                 strokeWidth = 1.dp.toPx(),
@@ -149,7 +158,11 @@ fun GlassCard(
     val alpha = LocalGlassAlpha.current
     val accent = LocalAccent.current
     val cardTint = LocalTheme.current.cardTintColor
-    val shape = RoundedCornerShape(radius)
+    val shape = remember(radius) { RoundedCornerShape(radius) }
+    // The glass fill is a Brush: rebuilding it on every recomposition
+    // allocates on every progress/scroll tick. Remember it per
+    // alpha+tint so recomposition reuses the same brush object.
+    val fillBrush = remember(alpha, cardTint) { glassBrush(alpha, cardTint) }
     var cardModifier = modifier
         .shadow(
             12.dp,
@@ -162,10 +175,10 @@ fun GlassCard(
             if (opaque) {
                 Modifier
                     .background(MaterialTheme.colorScheme.surface, shape)
-                    .border(1.dp, Color.White.copy(alpha = 0.12f), shape)
+                    .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f), shape)
             } else {
                 Modifier
-                    .background(glassBrush(alpha, cardTint), shape)
+                    .background(fillBrush, shape)
                     .glassEdge(shape)
             }
         )
@@ -191,7 +204,8 @@ fun GlassPanel(
     val alpha = LocalGlassAlpha.current
     val accent = LocalAccent.current
     val cardTint = LocalTheme.current.cardTintColor
-    val shape = RoundedCornerShape(radius)
+    val shape = remember(radius) { RoundedCornerShape(radius) }
+    val fillBrush = remember(alpha, cardTint) { glassBrush(alpha, cardTint) }
     var panelModifier = modifier
         .shadow(
             12.dp,
@@ -199,7 +213,7 @@ fun GlassPanel(
             ambientColor = Color.Black.copy(alpha = 0.35f),
             spotColor = accent.glowColor.copy(alpha = 0.22f)
         )
-        .background(glassBrush(alpha, cardTint), shape)
+        .background(fillBrush, shape)
         .glassEdge(shape)
         .clip(shape)
     if (onClick != null) {
@@ -225,19 +239,21 @@ fun GlassButton(
     val alpha = LocalGlassAlpha.current
     val accent = LocalAccent.current
     val cardTint = LocalTheme.current.cardTintColor
+    val shape = remember { RoundedCornerShape(24.dp) }
+    val fillBrush = remember(alpha, cardTint) { glassBrush(alpha, cardTint) }
     Box(
         modifier = modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .height(48.dp)
             .shadow(
                 6.dp,
-                RoundedCornerShape(24.dp),
+                shape,
                 ambientColor = Color.Black.copy(alpha = 0.3f),
                 spotColor = accent.glowColor.copy(alpha = 0.18f)
             )
-            .background(glassBrush(alpha, cardTint), RoundedCornerShape(24.dp))
-            .glassEdge(RoundedCornerShape(24.dp))
-            .clip(RoundedCornerShape(24.dp))
+            .background(fillBrush, shape)
+            .glassEdge(shape)
+            .clip(shape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -252,14 +268,14 @@ fun GlassButton(
                 androidx.compose.material3.Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = TextPrimary,
+                    tint = LocalTextPrimary.current,
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
             }
             Text(
                 text = text,
-                color = TextPrimary,
+                color = LocalTextPrimary.current,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium
             )
@@ -282,13 +298,14 @@ fun AccentGradientButton(
         targetValue = if (pressed) 0.95f else 1f, label = "accentButtonPress"
     )
     val accent = LocalAccent.current
+    val shape = remember { RoundedCornerShape(24.dp) }
     Box(
         modifier = modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .height(48.dp)
-            .shadow(10.dp, RoundedCornerShape(24.dp), ambientColor = accent.start.copy(alpha = 0.4f))
-            .background(accent.brush, RoundedCornerShape(24.dp))
-            .clip(RoundedCornerShape(24.dp))
+            .shadow(10.dp, shape, ambientColor = accent.start.copy(alpha = 0.4f))
+            .background(accent.brush, shape)
+            .clip(shape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -326,7 +343,7 @@ fun Badge(
     modifier: Modifier = Modifier
 ) {
     val accent = LocalAccent.current
-    val shape = RoundedCornerShape(8.dp)
+    val shape = remember { RoundedCornerShape(8.dp) }
     var badgeModifier = modifier
         .background(
             if (gradient) accent.brush
@@ -406,17 +423,17 @@ fun GlassTextField(
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        placeholder = { Text(text = placeholder, color = TextMuted, fontSize = 15.sp) },
+        placeholder = { Text(text = placeholder, color = LocalTextMuted.current, fontSize = 15.sp) },
         leadingIcon = leadingIcon,
         singleLine = singleLine,
         shape = RoundedCornerShape(24.dp),
         colors = OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = Color.White.copy(alpha = 0.10f),
-            unfocusedContainerColor = Color.White.copy(alpha = 0.06f),
-            focusedBorderColor = Color.White.copy(alpha = 0.50f),
-            unfocusedBorderColor = Color.White.copy(alpha = 0.40f),
-            focusedTextColor = TextPrimary,
-            unfocusedTextColor = TextPrimary,
+            focusedContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
+            unfocusedContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+            focusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.50f),
+            unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.40f),
+            focusedTextColor = LocalTextPrimary.current,
+            unfocusedTextColor = LocalTextPrimary.current,
             cursorColor = accent.start
         ),
         modifier = modifier.height(56.dp)
@@ -447,17 +464,19 @@ fun GlassBottomBar(
         HomeTab.SETTINGS to Icons.Filled.Settings
     )
     val alpha = LocalGlassAlpha.current
+    val shape = remember { RoundedCornerShape(24.dp) }
+    val fillBrush = remember(alpha, cardTint) { glassBrush(alpha, cardTint) }
     Row(
         modifier = modifier
             .fillMaxWidth()
             .shadow(
                 8.dp,
-                RoundedCornerShape(24.dp),
+                shape,
                 ambientColor = Color.Black.copy(alpha = 0.25f),
                 spotColor = accent.glowColor.copy(alpha = 0.18f)
             )
-            .background(glassBrush(alpha, cardTint), RoundedCornerShape(24.dp))
-            .glassEdge(RoundedCornerShape(24.dp))
+            .background(fillBrush, shape)
+            .glassEdge(shape)
             .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
@@ -476,12 +495,12 @@ fun GlassBottomBar(
                 androidx.compose.material3.Icon(
                     imageVector = icons.getValue(tab),
                     contentDescription = label,
-                    tint = if (isSelected) accent.start else TextMuted,
+                    tint = if (isSelected) accent.start else LocalTextMuted.current,
                     modifier = Modifier.size(24.dp)
                 )
                 Text(
                     text = label,
-                    color = if (isSelected) TextPrimary else TextMuted,
+                    color = if (isSelected) LocalTextPrimary.current else LocalTextMuted.current,
                     fontSize = 11.sp,
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
                 )
@@ -511,7 +530,7 @@ fun GlassBottomSheet(
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surface,
         dragHandle = {
-            BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.4f))
+            BottomSheetDefaults.DragHandle(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
         }
     ) {
         GlassCard(
@@ -545,7 +564,7 @@ fun GlassDialog(
 fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text.uppercase(),
-        color = TextSecondary,
+        color = LocalTextSecondary.current,
         fontSize = 12.sp,
         fontWeight = FontWeight.Bold,
         letterSpacing = 1.2.sp,
@@ -569,9 +588,9 @@ fun SettingRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(text = title, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(text = title, color = LocalTextPrimary.current, fontSize = 15.sp, fontWeight = FontWeight.Medium)
             if (subtitle != null) {
-                Text(text = subtitle, color = TextSecondary, fontSize = 13.sp)
+                Text(text = subtitle, color = LocalTextSecondary.current, fontSize = 13.sp)
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, content = trailing)

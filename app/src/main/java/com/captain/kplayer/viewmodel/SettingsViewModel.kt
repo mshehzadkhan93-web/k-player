@@ -58,6 +58,7 @@ class SettingsStore(private val context: Context) {
         val AUDIO_LANGUAGE = stringPreferencesKey("audio_language")
         val AUDIO_BOOST = floatPreferencesKey("audio_boost")
         val AUDIO_PASSTHROUGH = booleanPreferencesKey("audio_passthrough")
+        val AUDIO_DELAY_MS = intPreferencesKey("audio_delay_ms")
         val EQUALIZER_ENABLED = booleanPreferencesKey("equalizer_enabled")
         val THEME_NAME = stringPreferencesKey("theme_name")
         val BLUR_INTENSITY = floatPreferencesKey("blur_intensity")
@@ -138,6 +139,13 @@ class SettingsStore(private val context: Context) {
      */
     val audioPassthrough: Flow<Boolean> =
         context.settingsDataStore.data.map { it[Keys.AUDIO_PASSTHROUGH] ?: false }
+    /**
+     * Audio delay offset in milliseconds, -5000 (audio 5s early) to
+     * +5000 (audio 5s late). Persisted here; the player applies it
+     * when it opens a video. 0 means in sync.
+     */
+    val audioDelayMs: Flow<Int> =
+        context.settingsDataStore.data.map { it[Keys.AUDIO_DELAY_MS] ?: 0 }
     /** Library default view: "grid" | "list". */
     val defaultView: Flow<String> =
         context.settingsDataStore.data.map { it[Keys.DEFAULT_VIEW] ?: "grid" }
@@ -176,6 +184,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setSubtitleFont(v: String) = edit { it[Keys.SUBTITLE_FONT] = v }
     suspend fun setAudioBoost(v: Float) = edit { it[Keys.AUDIO_BOOST] = v }
     suspend fun setAudioPassthrough(v: Boolean) = edit { it[Keys.AUDIO_PASSTHROUGH] = v }
+    suspend fun setAudioDelayMs(v: Int) = edit { it[Keys.AUDIO_DELAY_MS] = v.coerceIn(-5000, 5000) }
     suspend fun setDefaultView(v: String) = edit { it[Keys.DEFAULT_VIEW] = v }
     suspend fun setDefaultSort(v: String) = edit { it[Keys.DEFAULT_SORT] = v }
     suspend fun setShowHiddenFiles(v: Boolean) = edit { it[Keys.SHOW_HIDDEN_FILES] = v }
@@ -269,6 +278,7 @@ class SettingsViewModel(
     val subtitleFont = state(store.subtitleFont, "Sans Serif")
     val audioBoost = state(store.audioBoost, 1.0f)
     val audioPassthrough = state(store.audioPassthrough, false)
+    val audioDelayMs = state(store.audioDelayMs, 0)
     val defaultView = state(store.defaultView, "grid")
     val defaultSort = state(store.defaultSort, "name")
     val showHiddenFiles = state(store.showHiddenFiles, false)
@@ -302,6 +312,7 @@ class SettingsViewModel(
     fun setSubtitleFont(v: String) = viewModelScope.launch { store.setSubtitleFont(v) }
     fun setAudioBoost(v: Float) = viewModelScope.launch { store.setAudioBoost(v) }
     fun setAudioPassthrough(v: Boolean) = viewModelScope.launch { store.setAudioPassthrough(v) }
+    fun setAudioDelayMs(v: Int) = viewModelScope.launch { store.setAudioDelayMs(v) }
     fun setDefaultView(v: String) = viewModelScope.launch { store.setDefaultView(v) }
     fun setDefaultSort(v: String) = viewModelScope.launch { store.setDefaultSort(v) }
     fun setShowHiddenFiles(v: Boolean) = viewModelScope.launch { store.setShowHiddenFiles(v) }

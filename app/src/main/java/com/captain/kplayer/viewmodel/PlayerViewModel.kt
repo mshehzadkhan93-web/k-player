@@ -20,6 +20,7 @@ import com.captain.kplayer.data.TrackItem
 import com.captain.kplayer.data.VideoItem
 import com.captain.kplayer.data.toQueueEntry
 import com.captain.kplayer.player.EqualizerManager
+import com.captain.kplayer.player.PlaybackService
 import com.captain.kplayer.player.PlayerFactory
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -81,6 +83,15 @@ class PlayerViewModel(
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _isPlaying.value = isPlaying
+            // Foreground playback service: start it when playback starts
+            // with background play enabled, stop it when playback pauses
+            // or stops (see PlaybackService — no MediaSession, the
+            // notification actions are the only background controls).
+            if (isPlaying && backgroundPlay.value) {
+                PlaybackService.start(appContext)
+            } else if (!isPlaying) {
+                PlaybackService.stop(appContext)
+            }
         }
 
         override fun onTracksChanged(tracks: Tracks) {
@@ -159,7 +170,7 @@ class PlayerViewModel(
         _playerError.value = null
     }
 
-    val speedOptions = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
+    val speedOptions = listOf(0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 4.0f)
     private val _speed = MutableStateFlow(1.0f)
     val speed: StateFlow<Float> = _speed
 
@@ -218,6 +229,22 @@ class PlayerViewModel(
     /** "always_ask" | "always_resume" | "never". */
     val resumeMode: StateFlow<String> =
         store.resumeMode.stateIn(viewModelScope, SharingStarted.Eagerly, "always_resume")
+    /** Current decoder mode ("hw" | "hw_plus" | "sw"), switchable from the player menu. */
+    val decodingMode: StateFlow<String> =
+        store.decodingMode.stateIn(viewModelScope, SharingStarted.Eagerly, "hw_plus")
+    /**
+     * Audio delay in ms. Positive = audio plays later (audio is ahead
+     * of the video), negative = audio plays earlier. SINGLE SOURCE OF
+     * TRUTH IS SettingsStore ("kplayer_settings", key "audio_delay_ms",
+     * -5000..5000): the Settings screen and the player dialog both read
+     * and write that one value. The old separate "kplayer_player"
+     * DataStore is gone — any value persisted there is orphaned and
+     * ignored. Applied live to the player's audio sink via
+     * PlayerFactory and re-applied on every player rebuild.
+     */
+    val audioDelayMs: StateFlow<Long> = store.audioDelayMs
+        .map { it.toLong() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0L)
     val rememberSpeed: StateFlow<Boolean> =
         store.rememberSpeed.stateIn(viewModelScope, SharingStarted.Eagerly, true)
     /** Double-tap seek step in seconds (5 / 10 / 15 / 30). */
@@ -292,6 +319,11 @@ class PlayerViewModel(
         }
     }
 
+    /** Clears A-B repeat (used by the seek-bar status row's Clear button). */
+    fun clearABRepeat() {
+        _abState.value = ABState.OFF
+    }
+
     private var sleepJob: Job? = null
     private var tickerJob: Job? = null
     private var seekWatchdogJob: Job? = null
@@ -325,6 +357,12 @@ class PlayerViewModel(
             store.abRepeat.collect { enabled ->
                 if (!enabled) _abState.value = ABState.OFF
             }
+        }
+        viewModelScope.launch {
+            // Applies the persisted audio delay live, and re-applies it
+            // whenever it changes (the value is also passed into
+            // buildPlayer so a decoder-mode rebuild picks it up).
+            audioDelayMs.collect { PlayerFactory.setAudioDelayMs(it) }
         }
         tickerJob = viewModelScope.launch {
             while (isActive) {
@@ -362,15 +400,35 @@ class PlayerViewModel(
         viewModelScope.launch { store.setAudioBoost(boost.coerceIn(1f, 2f)) }
     }
 
+    /** Switches the decoder mode (HW / HW+ / SW); the player rebuilds automatically. */
+    fun setDecodingMode(mode: String) {
+        if (mode != "hw" && mode != "hw_plus" && mode != "sw") return
+        viewModelScope.launch { store.setDecodingMode(mode) }
+    }
+
+    /** Persists the audio delay (-5000..5000 ms, SettingsStore's range) and applies it live. */
+    fun setAudioDelayMs(delayMs: Long) {
+        val clamped = delayMs.coerceIn(-5000L, 5000L)
+        PlayerFactory.setAudioDelayMs(clamped)
+        viewModelScope.launch { store.setAudioDelayMs(clamped.toInt()) }
+    }
+
+    fun adjustAudioDelayMs(deltaMs: Long) {
+        setAudioDelayMs(audioDelayMs.value + deltaMs)
+    }
+
     fun setAudioPassthrough(on: Boolean) {
         viewModelScope.launch { store.setAudioPassthrough(on) }
     }
 
     private fun buildPlayer(decodingMode: String) {
         currentDecodingMode = decodingMode
-        player = PlayerFactory.buildPlayer(appContext, decodingMode)
+        player = PlayerFactory.buildPlayer(appContext, decodingMode, audioDelayMs.value)
         player.addListener(listener)
         playerBuilt = true
+        // Publish the player to the foreground playback service so its
+        // notification actions can control this same instance.
+        PlaybackService.setPlayer(player)
         applyDefaultSpeed()
     }
 
@@ -543,6 +601,16 @@ class PlayerViewModel(
         }
     }
 
+    /**
+     * Loads a ready-made queue (e.g. a mixed playlist) as one queue and
+     * starts it at [startIndex]. Public wrapper around [startQueue] so
+     * callers that already built [QueueEntry]s do not have to go through
+     * playVideo / playTrack / playStream.
+     */
+    fun playEntries(entries: List<QueueEntry>, startIndex: Int = 0) {
+        startQueue(entries, startIndex)
+    }
+
     fun playQueueEntry(index: Int) {
         if (!playerBuilt || index !in queue.value.indices) return
         _currentIndex.value = index
@@ -550,6 +618,18 @@ class PlayerViewModel(
         player.seekToDefaultPosition(index)
         player.playWhenReady = true
         player.prepare()
+        // Resume: same saved-position check as playVideo, so opening a
+        // video from the playlist also offers to continue watching.
+        val entry = queue.value[index]
+        viewModelScope.launch {
+            val saved = store.resumePositionFlow(entry.id).first()
+            if (saved <= 5_000L || saved >= entry.durationMs - 10_000L) return@launch
+            when (resumeMode.value) {
+                "always_resume" -> player.seekTo(saved)
+                "always_ask" -> _resumePrompt.value = ResumePrompt(entry.id, saved)
+                "never" -> Unit
+            }
+        }
     }
 
     private fun startQueue(entries: List<QueueEntry>, startIndex: Int) {
@@ -1054,10 +1134,21 @@ class PlayerViewModel(
     // Lifecycle helpers
     // ------------------------------------------------------------------
 
-    /** Called when the app goes to background. */
+    /**
+     * Called when the app goes to background. With background play on,
+     * the player is left running under the foreground [PlaybackService]
+     * (started from onIsPlayingChanged / here), so audio keeps playing
+     * after the app is swiped away. With background play off, playback
+     * pauses here.
+     */
     fun onAppBackgrounded() {
         if (!backgroundPlay.value && playerBuilt) {
             player.pause()
+        } else if (backgroundPlay.value && playerBuilt && player.isPlaying) {
+            // Playback was already running: make sure the foreground
+            // service is up (e.g. background play was just switched on
+            // while playing) so audio survives the backgrounding.
+            PlaybackService.start(appContext)
         }
     }
 
@@ -1084,6 +1175,8 @@ class PlayerViewModel(
         seekWatchdogJob?.cancel()
         saveCurrentResumePosition()
         _equalizerManager.value?.release()
+        PlaybackService.stop(appContext)
+        PlaybackService.setPlayer(null)
         if (playerBuilt) {
             player.removeListener(listener)
             player.release()

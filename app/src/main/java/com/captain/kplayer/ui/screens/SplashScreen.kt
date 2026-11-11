@@ -45,9 +45,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.captain.kplayer.ui.theme.GradientBackground
 import com.captain.kplayer.ui.theme.LocalAccent
-import com.captain.kplayer.ui.theme.TextMuted
-import com.captain.kplayer.ui.theme.TextPrimary
-import com.captain.kplayer.ui.theme.TextSecondary
+import com.captain.kplayer.ui.theme.LocalTextMuted
+import com.captain.kplayer.ui.theme.LocalTextPrimary
+import com.captain.kplayer.ui.theme.LocalTextSecondary
 import kotlinx.coroutines.delay
 
 /** One drifting glow particle on the splash screen. */
@@ -326,7 +326,7 @@ fun SplashScreen(onFinished: () -> Unit) {
             Spacer(modifier = Modifier.height(28.dp))
             SplashFadeText(
                 text = "K-Player",
-                color = TextPrimary,
+                color = LocalTextPrimary.current,
                 fontSize = 36.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp,
@@ -335,7 +335,7 @@ fun SplashScreen(onFinished: () -> Unit) {
             Spacer(modifier = Modifier.height(4.dp))
             SplashFadeText(
                 text = "by Shehzad",
-                color = TextSecondary,
+                color = LocalTextSecondary.current,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
                 letterSpacing = 2.sp,
@@ -344,7 +344,7 @@ fun SplashScreen(onFinished: () -> Unit) {
             Spacer(modifier = Modifier.height(12.dp))
             SplashFadeText(
                 text = "Play everything beautifully",
-                color = TextMuted,
+                color = LocalTextMuted.current,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Normal,
                 delayMillis = 750

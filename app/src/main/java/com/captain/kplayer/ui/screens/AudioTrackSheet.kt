@@ -17,6 +17,8 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -25,8 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.captain.kplayer.ui.components.GlassBottomSheet
 import com.captain.kplayer.ui.theme.LocalAccent
-import com.captain.kplayer.ui.theme.TextPrimary
-import com.captain.kplayer.ui.theme.TextSecondary
+import com.captain.kplayer.ui.theme.LocalTextPrimary
+import com.captain.kplayer.ui.theme.LocalTextSecondary
 import com.captain.kplayer.viewmodel.PlayerViewModel
 import com.captain.kplayer.viewmodel.UiAudioTrack
 
@@ -42,17 +44,31 @@ fun AudioTrackSheet(
     onDismiss: () -> Unit
 ) {
     val accent = LocalAccent.current
+    // Two tracks can share a language (e.g. two English tracks: main
+    // and commentary). Number the duplicates so each row is tappable
+    // without guessing which is which. Computed purely from the list,
+    // keyed by track identity — no mutation during composition.
+    val displayLabels = remember(audioTracks) {
+        val counts = mutableMapOf<String, Int>()
+        audioTracks.associate { track ->
+            val n = (counts[track.label] ?: 0) + 1
+            counts[track.label] = n
+            val total = audioTracks.count { it.label == track.label }
+            (track.groupIndex to track.trackIndex) to
+                if (total > 1) "${track.label} $n" else track.label
+        }
+    }
     GlassBottomSheet(onDismiss = onDismiss) {
         Text(
             text = "Audio Track",
-            color = TextPrimary,
+            color = LocalTextPrimary.current,
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(start = 20.dp, top = 8.dp, bottom = 4.dp)
         )
         Text(
-            text = "Choose the audio language for this video.",
-            color = TextSecondary,
+            text = "Choose the audio language for this video. Switching is live — playback keeps going.",
+            color = LocalTextSecondary.current,
             fontSize = 13.sp,
             modifier = Modifier.padding(start = 20.dp, bottom = 12.dp)
         )
@@ -66,19 +82,20 @@ fun AudioTrackSheet(
                 Icon(
                     imageVector = Icons.Rounded.Audiotrack,
                     contentDescription = null,
-                    tint = TextSecondary,
+                    tint = LocalTextSecondary.current,
                     modifier = Modifier.size(22.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
                     text = "Default audio",
-                    color = TextPrimary,
+                    color = LocalTextPrimary.current,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
         }
         audioTracks.forEach { track ->
+            key(track.groupIndex, track.trackIndex) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -97,14 +114,15 @@ fun AudioTrackSheet(
                 Spacer(modifier = Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = track.label,
-                        color = TextPrimary,
+                        text = displayLabels[track.groupIndex to track.trackIndex]
+                            ?: track.label,
+                        color = LocalTextPrimary.current,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Medium
                     )
                     Text(
                         text = "${track.codec} • ${track.channels}",
-                        color = TextSecondary,
+                        color = LocalTextSecondary.current,
                         fontSize = 13.sp
                     )
                 }
@@ -116,6 +134,7 @@ fun AudioTrackSheet(
                         modifier = Modifier.size(20.dp)
                     )
                 }
+            }
             }
         }
         Row(
@@ -136,7 +155,7 @@ fun AudioTrackSheet(
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = "Off",
-                color = TextPrimary,
+                color = LocalTextPrimary.current,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium
             )

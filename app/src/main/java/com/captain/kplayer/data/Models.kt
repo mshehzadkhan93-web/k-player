@@ -36,8 +36,13 @@ data class VideoItem(
     /** Epoch millis the file was added — used by the Date sort order. */
     val dateAddedMs: Long = 0L,
     /** Epoch millis the video was last played (0 = never) — Recently Played. */
-    val lastPlayedMs: Long = 0L
+    val lastPlayedMs: Long = 0L,
+    /** User-marked watched flag (persisted in LibraryStateStore) — v2.0 library. */
+    val isWatched: Boolean = false
 )
+
+/** Route/folder key for the PIN-locked Private folder (not a real directory). */
+const val PRIVATE_FOLDER_PATH = "__private__"
 
 data class TrackItem(
     val id: String,

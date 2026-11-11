@@ -25,6 +25,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -33,8 +35,8 @@ import androidx.compose.ui.unit.sp
 import com.captain.kplayer.ui.components.GlassBottomSheet
 import com.captain.kplayer.ui.components.GlassButton
 import com.captain.kplayer.ui.theme.LocalAccent
-import com.captain.kplayer.ui.theme.TextPrimary
-import com.captain.kplayer.ui.theme.TextSecondary
+import com.captain.kplayer.ui.theme.LocalTextPrimary
+import com.captain.kplayer.ui.theme.LocalTextSecondary
 import com.captain.kplayer.viewmodel.PlayerViewModel
 import com.captain.kplayer.viewmodel.SettingsViewModel
 import com.captain.kplayer.viewmodel.UiSubtitleTrack
@@ -59,18 +61,32 @@ fun SubtitleSheet(
     val color by settingsVm.subtitleColor.collectAsState()
     val background by settingsVm.subtitleBackground.collectAsState()
     val font by settingsVm.subtitleFont.collectAsState()
+    // Two tracks can share a language (e.g. two English tracks: main
+    // and commentary). Number the duplicates so each row is tappable
+    // without guessing which is which. Computed purely from the list,
+    // keyed by track identity — no mutation during composition.
+    val displayLabels = remember(subtitleTracks) {
+        val counts = mutableMapOf<String, Int>()
+        subtitleTracks.associate { track ->
+            val n = (counts[track.label] ?: 0) + 1
+            counts[track.label] = n
+            val total = subtitleTracks.count { it.label == track.label }
+            (track.groupIndex to track.trackIndex) to
+                if (total > 1) "${track.label} $n" else track.label
+        }
+    }
 
     GlassBottomSheet(onDismiss = onDismiss) {
         Text(
             text = "Subtitles",
-            color = TextPrimary,
+            color = LocalTextPrimary.current,
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(start = 20.dp, top = 8.dp, bottom = 4.dp)
         )
         Text(
-            text = "Subtitles in .srt, .vtt and .ass are supported.",
-            color = TextSecondary,
+            text = "Subtitles in .srt, .vtt and .ass are supported — from files on this device only, no online search.",
+            color = LocalTextSecondary.current,
             fontSize = 13.sp,
             modifier = Modifier.padding(start = 20.dp, bottom = 12.dp)
         )
@@ -84,18 +100,19 @@ fun SubtitleSheet(
                 Icon(
                     imageVector = Icons.Rounded.Subtitles,
                     contentDescription = null,
-                    tint = TextSecondary,
+                    tint = LocalTextSecondary.current,
                     modifier = Modifier.size(22.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
                     text = "No embedded subtitles in this video — load one from a file",
-                    color = TextSecondary,
+                    color = LocalTextSecondary.current,
                     fontSize = 14.sp
                 )
             }
         }
         subtitleTracks.forEach { track ->
+            key(track.groupIndex, track.trackIndex) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -113,12 +130,15 @@ fun SubtitleSheet(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = track.label,
-                    color = TextPrimary,
+                    text = displayLabels[track.groupIndex to track.trackIndex]
+                        ?: track.label,
+                    color = LocalTextPrimary.current,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
                 )
+                // "File" = loaded from an external .srt/.vtt/.ass file;
+                // "Embedded" = inside the video file.
                 EmbeddedTag(if (track.isExternal) "File" else "Embedded")
                 Spacer(modifier = Modifier.width(8.dp))
                 if (track.selected && !subtitlesDisabled) {
@@ -129,6 +149,7 @@ fun SubtitleSheet(
                         modifier = Modifier.size(20.dp)
                     )
                 }
+            }
             }
         }
         Row(
@@ -149,7 +170,7 @@ fun SubtitleSheet(
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = "Off",
-                color = TextPrimary,
+                color = LocalTextPrimary.current,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium
             )
@@ -173,7 +194,7 @@ fun SubtitleSheet(
         ) {
             Text(
                 text = "Sync delay",
-                color = TextPrimary,
+                color = LocalTextPrimary.current,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.weight(1f)
@@ -185,12 +206,12 @@ fun SubtitleSheet(
                 Icon(
                     imageVector = Icons.Rounded.Remove,
                     contentDescription = "Delay minus 0.5s",
-                    tint = TextPrimary
+                    tint = LocalTextPrimary.current
                 )
             }
             Text(
                 text = if (delayMs >= 0) "+${delayMs / 1000.0}s" else "${delayMs / 1000.0}s",
-                color = TextPrimary,
+                color = LocalTextPrimary.current,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -201,15 +222,36 @@ fun SubtitleSheet(
                 Icon(
                     imageVector = Icons.Rounded.Add,
                     contentDescription = "Delay plus 0.5s",
-                    tint = TextPrimary
+                    tint = LocalTextPrimary.current
+                )
+            }
+            if (delayMs != 0L) {
+                Text(
+                    text = "Reset",
+                    color = accent.start,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clickable { playerVm.adjustSubtitleDelay(-delayMs) }
+                        .padding(horizontal = 4.dp, vertical = 8.dp)
                 )
             }
         }
+        // The delay is baked into an external subtitle file's cue
+        // timestamps when the file is loaded; it does not shift the
+        // video's embedded subtitles mid-playback. Set the delay
+        // before loading a file for it to apply to that file.
+        Text(
+            text = "Delay applies when an external file is loaded. Embedded subtitles keep the video's own timing.",
+            color = LocalTextSecondary.current,
+            fontSize = 13.sp,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp)
+        )
 
         // Live style controls (same values as Settings > Subtitles).
         Text(
             text = "Style",
-            color = TextPrimary,
+            color = LocalTextPrimary.current,
             fontSize = 15.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(start = 20.dp, top = 8.dp)
@@ -222,7 +264,7 @@ fun SubtitleSheet(
         ) {
             Text(
                 text = "Size",
-                color = TextSecondary,
+                color = LocalTextSecondary.current,
                 fontSize = 14.sp,
                 modifier = Modifier.weight(1f)
             )
@@ -239,7 +281,7 @@ fun SubtitleSheet(
         ) {
             Text(
                 text = "Color",
-                color = TextSecondary,
+                color = LocalTextSecondary.current,
                 fontSize = 14.sp,
                 modifier = Modifier.weight(1f)
             )
@@ -256,7 +298,7 @@ fun SubtitleSheet(
         ) {
             Text(
                 text = "Background",
-                color = TextSecondary,
+                color = LocalTextSecondary.current,
                 fontSize = 14.sp,
                 modifier = Modifier.weight(1f)
             )
@@ -277,7 +319,7 @@ fun SubtitleSheet(
         ) {
             Text(
                 text = "Font",
-                color = TextSecondary,
+                color = LocalTextSecondary.current,
                 fontSize = 14.sp,
                 modifier = Modifier.weight(1f)
             )

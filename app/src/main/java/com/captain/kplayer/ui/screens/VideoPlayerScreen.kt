@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.BrightnessHigh
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Lock
@@ -102,6 +104,8 @@ import com.captain.kplayer.ui.components.GlassButton
 import com.captain.kplayer.ui.components.GlassCard
 import com.captain.kplayer.ui.components.GlassDialog
 import com.captain.kplayer.ui.theme.LocalAccent
+import com.captain.kplayer.ui.theme.LocalTextPrimary
+import com.captain.kplayer.ui.theme.LocalTextSecondary
 import com.captain.kplayer.ui.theme.TextPrimary
 import com.captain.kplayer.viewmodel.LibraryViewModel
 import com.captain.kplayer.viewmodel.PlayerViewModel
@@ -139,9 +143,12 @@ private sealed interface GestureOverlay {
  * consumed (so button taps never double-fire); vertical brightness /
  * volume drags always apply; horizontal seek drags are skipped when the
  * down was consumed (the seek Slider owns those).
- * Speed and aspect controls, screen lock, background play,
+ * Speed (0.25x-4x sheet), aspect controls, screen lock, background play,
  * picture-in-picture, audio/subtitle sheets, equalizer, playlist and video
- * info are all wired as before.
+ * info are all wired as before. The top-bar menu also holds the sleep
+ * timer, volume boost (100-200%), audio delay (-1000..+1000 ms) and the
+ * HW / HW+ / SW decoder switch; A-B repeat points are marked with amber
+ * ticks on the seek bar.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -171,7 +178,11 @@ fun VideoPlayerScreen(
     val subtitlesDisabled by playerVm.subtitlesDisabled.collectAsState()
     val resumePrompt by playerVm.resumePrompt.collectAsState()
     val abState by playerVm.abState.collectAsState()
+    val aPointMs by playerVm.aPointMs.collectAsState()
+    val bPointMs by playerVm.bPointMs.collectAsState()
     val abRepeatEnabled by playerVm.abRepeatEnabled.collectAsState()
+    val audioDelayMs by playerVm.audioDelayMs.collectAsState()
+    val sleepRemainingMs by playerVm.sleepRemainingMs.collectAsState()
     val doubleTapStep by playerVm.doubleTapSeekSeconds.collectAsState()
     val pipEnabled by playerVm.pipEnabled.collectAsState()
     val backgroundPlay by playerVm.backgroundPlay.collectAsState()
@@ -188,12 +199,18 @@ fun VideoPlayerScreen(
     val subtitleBackground by settingsVm.subtitleBackground.collectAsState()
     val subtitleFont by settingsVm.subtitleFont.collectAsState()
     val subtitleSize by settingsVm.subtitleSize.collectAsState()
+    val decodingMode by settingsVm.decodingMode.collectAsState()
+    val audioBoost by settingsVm.audioBoost.collectAsState()
+    val audioPassthrough by playerVm.audioPassthrough.collectAsState()
 
     var controlsVisible by remember { mutableStateOf(true) }
     var showAudioSheet by remember { mutableStateOf(false) }
     var showSubtitleSheet by remember { mutableStateOf(false) }
     var showEqualizer by remember { mutableStateOf(false) }
     var showVideoInfo by remember { mutableStateOf(false) }
+    var showSleepDialog by remember { mutableStateOf(false) }
+    var showBoostDialog by remember { mutableStateOf(false) }
+    var showDelayDialog by remember { mutableStateOf(false) }
     var showSpeedMenu by remember { mutableStateOf(false) }
     var showTopMenu by remember { mutableStateOf(false) }
     var overlay by remember { mutableStateOf<GestureOverlay?>(null) }
@@ -927,6 +944,82 @@ fun VideoPlayerScreen(
                                         }
                                     )
                                     DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                sleepRemainingMs?.let { "Sleep timer: ${formatDuration(it)} left" }
+                                                    ?: "Sleep timer: Off"
+                                            )
+                                        },
+                                        onClick = { showTopMenu = false; showSleepDialog = true }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Volume boost: ${(audioBoost * 100).toInt()}%") },
+                                        onClick = { showTopMenu = false; showBoostDialog = true }
+                                    )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                when {
+                                                    audioDelayMs > 0 -> "Audio delay: +${audioDelayMs} ms"
+                                                    audioDelayMs < 0 -> "Audio delay: ${audioDelayMs} ms"
+                                                    else -> "Audio delay: 0 ms"
+                                                }
+                                            )
+                                        },
+                                        onClick = { showTopMenu = false; showDelayDialog = true }
+                                    )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                "Decoder: HW" +
+                                                    if (decodingMode == "hw") " (current)" else ""
+                                            )
+                                        },
+                                        onClick = {
+                                            showTopMenu = false
+                                            settingsVm.setDecodingMode("hw")
+                                            Toast.makeText(
+                                                context,
+                                                "Decoder: HW - player restarting...",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                "Decoder: HW+" +
+                                                    if (decodingMode == "hw_plus") " (current)" else ""
+                                            )
+                                        },
+                                        onClick = {
+                                            showTopMenu = false
+                                            settingsVm.setDecodingMode("hw_plus")
+                                            Toast.makeText(
+                                                context,
+                                                "Decoder: HW+ - player restarting...",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                "Decoder: SW" +
+                                                    if (decodingMode == "sw") " (current)" else ""
+                                            )
+                                        },
+                                        onClick = {
+                                            showTopMenu = false
+                                            settingsVm.setDecodingMode("sw")
+                                            Toast.makeText(
+                                                context,
+                                                "Decoder: SW - player restarting...",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text("Playlist") },
                                         onClick = { showTopMenu = false; onOpenPlaylist() }
                                     )
@@ -1037,6 +1130,37 @@ fun VideoPlayerScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 10.dp)
                     ) {
+                        // A-B repeat: live status + clear, shown only while
+                        // point A is set. The A/B ticks on the seek bar
+                        // below show exactly where the loop runs.
+                        if (abState != PlayerViewModel.ABState.OFF) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = when (abState) {
+                                        PlayerViewModel.ABState.A_SET ->
+                                            "A-B: A at ${formatDuration(aPointMs)} - set B from the menu"
+                                        PlayerViewModel.ABState.LOOPING ->
+                                            "A-B loop: ${formatDuration(aPointMs)} -> ${formatDuration(bPointMs)}"
+                                        else -> ""
+                                    },
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = "Clear",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.clickable { playerVm.clearABRepeat() }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = formatDuration(
@@ -1071,6 +1195,69 @@ fun VideoPlayerScreen(
                                         .clip(RoundedCornerShape(3.dp))
                                         .background(LocalAccent.current.brush)
                                 )
+                                // A-B markers: amber ticks at A and (while
+                                // looping) B, plus a translucent range
+                                // highlight between them. They sit under the
+                                // Slider, whose own track is transparent.
+                                if (abState != PlayerViewModel.ABState.OFF && duration > 0) {
+                                    val aFrac = (aPointMs.toFloat() / duration).coerceIn(0f, 1f)
+                                    val bFrac = (bPointMs.toFloat() / duration).coerceIn(0f, 1f)
+                                    if (abState == PlayerViewModel.ABState.LOOPING && bFrac > aFrac) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.CenterStart)
+                                                .fillMaxWidth(bFrac)
+                                                .height(5.dp),
+                                            contentAlignment = Alignment.CenterEnd
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth((bFrac - aFrac) / bFrac)
+                                                    .height(5.dp)
+                                                    .clip(RoundedCornerShape(3.dp))
+                                                    .background(
+                                                        Color(0xFFFFD54F).copy(alpha = 0.45f)
+                                                    )
+                                            )
+                                        }
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.CenterStart)
+                                            .fillMaxWidth(aFrac)
+                                            .height(12.dp),
+                                        contentAlignment = Alignment.CenterEnd
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .width(3.dp)
+                                                .fillMaxHeight()
+                                                .background(
+                                                    Color(0xFFFFD54F),
+                                                    RoundedCornerShape(2.dp)
+                                                )
+                                        )
+                                    }
+                                    if (abState == PlayerViewModel.ABState.LOOPING) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.CenterStart)
+                                                .fillMaxWidth(bFrac)
+                                                .height(12.dp),
+                                            contentAlignment = Alignment.CenterEnd
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .width(3.dp)
+                                                    .fillMaxHeight()
+                                                    .background(
+                                                        Color(0xFFFFD54F),
+                                                        RoundedCornerShape(2.dp)
+                                                    )
+                                            )
+                                        }
+                                    }
+                                }
                                 Slider(
                                     value = seekFraction,
                                     onValueChange = {
@@ -1141,27 +1328,11 @@ fun VideoPlayerScreen(
                                 text = aspectLabel(aspect),
                                 onClick = { playerVm.cycleAspect() }
                             )
-                            Box(modifier = Modifier.weight(1f)) {
-                                GlassPillButton(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    text = if (speed % 1f == 0f) "${speed.toInt()}x" else "${speed}x",
-                                    onClick = { showSpeedMenu = true }
-                                )
-                                DropdownMenu(
-                                    expanded = showSpeedMenu,
-                                    onDismissRequest = { showSpeedMenu = false }
-                                ) {
-                                    playerVm.speedOptions.forEach { option ->
-                                        DropdownMenuItem(
-                                            text = { Text("${option}x") },
-                                            onClick = {
-                                                playerVm.setSpeed(option)
-                                                showSpeedMenu = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
+                            GlassPillButton(
+                                modifier = Modifier.weight(1f),
+                                text = if (speed % 1f == 0f) "${speed.toInt()}x" else "${speed}x",
+                                onClick = { showSpeedMenu = true }
+                            )
                             GlassPillButton(
                                 modifier = Modifier.weight(1f),
                                 icon = Icons.Rounded.LockOpen,
@@ -1204,6 +1375,36 @@ fun VideoPlayerScreen(
             entry = entry,
             video = entry?.let { libraryVm.videoById(it.id) },
             onDismiss = { showVideoInfo = false }
+        )
+    }
+    if (showSpeedMenu) {
+        SpeedSheetDialog(
+            speed = speed,
+            options = playerVm.speedOptions,
+            onSelect = { playerVm.setSpeed(it); showSpeedMenu = false },
+            onDismiss = { showSpeedMenu = false }
+        )
+    }
+    if (showSleepDialog) {
+        SleepTimerDialog(
+            remainingMs = sleepRemainingMs,
+            onSet = { minutes -> playerVm.startSleepTimer(minutes); showSleepDialog = false },
+            onDismiss = { showSleepDialog = false }
+        )
+    }
+    if (showBoostDialog) {
+        VolumeBoostDialog(
+            boost = audioBoost,
+            passthrough = audioPassthrough,
+            onBoostChange = { playerVm.setAudioBoost(it) },
+            onDismiss = { showBoostDialog = false }
+        )
+    }
+    if (showDelayDialog) {
+        AudioDelayDialog(
+            delayMs = audioDelayMs,
+            onDelayChange = { playerVm.setAudioDelayMs(it) },
+            onDismiss = { showDelayDialog = false }
         )
     }
     resumePrompt?.let { prompt ->
@@ -1342,6 +1543,229 @@ private fun subtitleTypeface(name: String): Typeface = when (name) {
 }
 
 /**
+ * MX-style speed sheet: all presets 0.25x-4x with the current speed
+ * checked. Long-pressing the video still gives temporary 2x.
+ */
+@Composable
+private fun SpeedSheetDialog(
+    speed: Float,
+    options: List<Float>,
+    onSelect: (Float) -> Unit,
+    onDismiss: () -> Unit
+) {
+    GlassDialog(onDismiss = onDismiss) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                text = "Playback speed",
+                color = LocalTextPrimary.current,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            options.forEach { option ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(option) }
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (option % 1f == 0f) "${option.toInt()}x" else "${option}x",
+                        color = LocalTextPrimary.current,
+                        fontSize = 16.sp,
+                        fontWeight = if (option == speed) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (option == speed) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = "Selected",
+                            tint = LocalAccent.current.start,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Long-press the video any time for temporary 2x speed.",
+                color = LocalTextSecondary.current,
+                fontSize = 13.sp
+            )
+        }
+    }
+}
+
+/**
+ * Sleep timer: presets up to 60 minutes, or Off to cancel. The timer runs
+ * in the ViewModel (a countdown that pauses playback at zero) and keeps
+ * running with the screen off while the app process is alive.
+ */
+@Composable
+private fun SleepTimerDialog(
+    remainingMs: Long?,
+    onSet: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    GlassDialog(onDismiss = onDismiss) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                text = "Sleep timer",
+                color = LocalTextPrimary.current,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            remainingMs?.let {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Stops playback in ${formatDuration(it)}.",
+                    color = LocalTextSecondary.current,
+                    fontSize = 14.sp
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                GlassPillButton(modifier = Modifier.weight(1f), text = "Off") { onSet(0) }
+                GlassPillButton(modifier = Modifier.weight(1f), text = "5 min") { onSet(5) }
+                GlassPillButton(modifier = Modifier.weight(1f), text = "10 min") { onSet(10) }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                GlassPillButton(modifier = Modifier.weight(1f), text = "15 min") { onSet(15) }
+                GlassPillButton(modifier = Modifier.weight(1f), text = "30 min") { onSet(30) }
+                GlassPillButton(modifier = Modifier.weight(1f), text = "60 min") { onSet(60) }
+            }
+        }
+    }
+}
+
+/**
+ * Volume boost, 100-200%, via the LoudnessEnhancer in EqualizerManager
+ * (persisted as the audioBoost setting; default 100% = no boost, so
+ * nothing distorts unless the user asks for it). While audio passthrough
+ * is on the boost is bypassed and this slider does nothing.
+ */
+@Composable
+private fun VolumeBoostDialog(
+    boost: Float,
+    passthrough: Boolean,
+    onBoostChange: (Float) -> Unit,
+    onDismiss: () -> Unit
+) {
+    GlassDialog(onDismiss = onDismiss) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                text = "Volume boost",
+                color = LocalTextPrimary.current,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "${(boost * 100).toInt()}%",
+                color = LocalTextPrimary.current,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Slider(
+                value = boost,
+                onValueChange = onBoostChange,
+                valueRange = 1f..2f,
+                steps = 19,
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = LocalAccent.current.start,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = if (passthrough) {
+                    "Audio passthrough is on - boost is bypassed while it is enabled."
+                } else {
+                    "Boosts quiet audio up to 200%. Default is 100% (no boost)."
+                },
+                color = LocalTextSecondary.current,
+                fontSize = 13.sp
+            )
+        }
+    }
+}
+
+/**
+ * Audio delay (A/V sync), -1000..+1000 ms in 50 ms steps. Positive =
+ * audio plays later (use when the audio is ahead of the video). Applied
+ * live by the PCM delay processor in PlayerFactory; PCM audio only -
+ * bitstream passthrough is not delayed.
+ */
+@Composable
+private fun AudioDelayDialog(
+    delayMs: Long,
+    onDelayChange: (Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    GlassDialog(onDismiss = onDismiss) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                text = "Audio delay",
+                color = LocalTextPrimary.current,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = when {
+                    delayMs > 0 -> "+${delayMs} ms - audio plays later"
+                    delayMs < 0 -> "${delayMs} ms - audio plays earlier"
+                    else -> "0 ms - in sync"
+                },
+                color = LocalTextPrimary.current,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                GlassPillButton(
+                    modifier = Modifier.weight(1f),
+                    text = "-50 ms",
+                    onClick = { onDelayChange(delayMs - 50) }
+                )
+                GlassPillButton(
+                    modifier = Modifier.weight(1f),
+                    text = "+50 ms",
+                    onClick = { onDelayChange(delayMs + 50) }
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            GlassButton(
+                onClick = { onDelayChange(0) },
+                text = "Reset to 0 ms",
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Range -1000 to +1000 ms. Applies to PCM audio only; " +
+                    "bitstream passthrough is not delayed.",
+                color = LocalTextSecondary.current,
+                fontSize = 13.sp
+            )
+        }
+    }
+}
+
+/**
  * Shown when resume mode is "Always ask" and a saved position exists for
  * the video that just started.
  */
@@ -1355,7 +1779,7 @@ private fun ResumePromptDialog(
         Column(modifier = Modifier.padding(20.dp)) {
             Text(
                 text = "Resume playback?",
-                color = TextPrimary,
+                color = LocalTextPrimary.current,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -1363,7 +1787,7 @@ private fun ResumePromptDialog(
             Text(
                 text = "You stopped watching at ${formatDuration(positionMs)}. " +
                     "Resume from there, or start from the beginning?",
-                color = TextPrimary,
+                color = LocalTextPrimary.current,
                 fontSize = 14.sp
             )
             Spacer(modifier = Modifier.height(20.dp))

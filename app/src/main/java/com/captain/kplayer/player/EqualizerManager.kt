@@ -43,6 +43,24 @@ class EqualizerManager(audioSessionId: Int) {
             try {
                 equalizer?.enabled = value
                 bassBoost?.enabled = value && bassBoostStrength > 0
+                if (value) {
+                    // Re-assert the stored levels: on some devices the
+                    // effect resets its bands when (re)enabled, so the
+                    // sliders would show values the hardware no longer
+                    // has. Re-writing them makes UI and audio agree.
+                    bandLevels.forEachIndexed { index, level ->
+                        val band = bandIndices.getOrNull(index) ?: -1
+                        if (band >= 0) {
+                            val range = equalizer?.bandLevelRange ?: return@forEachIndexed
+                            val milliBel = (level * 100).toInt()
+                                .coerceIn(range[0].toInt(), range[1].toInt())
+                            equalizer?.setBandLevel(band.toShort(), milliBel.toShort())
+                        }
+                    }
+                    if (bassBoostStrength > 0) {
+                        bassBoost?.setStrength((bassBoostStrength * 10).toShort())
+                    }
+                }
             } catch (_: Exception) {
                 // Effects may be unavailable on some devices; ignore.
             }
@@ -56,6 +74,13 @@ class EqualizerManager(audioSessionId: Int) {
             equalizer = eq
             val bandCount = eq.numberOfBands.toInt()
             if (bandCount > 0) {
+                // Two targets must never share one device band: on a
+                // 3-band device 60Hz and 230Hz could both map to band 0,
+                // and the second write would silently overwrite the
+                // first. The first target keeps the band; later
+                // collisions stay -1 (that slider then does nothing
+                // instead of fighting another slider).
+                val usedBands = mutableSetOf<Int>()
                 indices = targetFrequencies.map { target ->
                     var best = 0
                     var bestDiff = Int.MAX_VALUE
@@ -67,7 +92,10 @@ class EqualizerManager(audioSessionId: Int) {
                             best = band
                         }
                     }
-                    best
+                    if (best in usedBands) -1 else {
+                        usedBands.add(best)
+                        best
+                    }
                 }
                 ok = true
             }
@@ -86,6 +114,19 @@ class EqualizerManager(audioSessionId: Int) {
         }
         bandIndices = indices
         supported = ok
+        // A new manager is built whenever the audio session changes
+        // (player rebuild, decoder fallback) — the old one is released
+        // and the UI's levels would silently reset to flat. Restore
+        // whatever the user last set, so the sound does not change
+        // under them after a rebuild.
+        if (ok) {
+            lastLevels?.let { levels ->
+                levels.forEachIndexed { index, level ->
+                    setBandLevel(targetFrequencies[index], level)
+                }
+            }
+            if (lastBassStrength > 0) setBassBoost(lastBassStrength)
+        }
     }
 
     /** Sets one band by target frequency, level in dB (-15..15). */
@@ -97,6 +138,8 @@ class EqualizerManager(audioSessionId: Int) {
         if (band < 0) return
         val clamped = levelDb.coerceIn(-15f, 15f)
         bandLevels = bandLevels.toMutableList().also { it[pos] = clamped }
+        // Remember across manager recreations (audio session change).
+        lastLevels = bandLevels
         try {
             val range = eq.bandLevelRange
             val milliBel = (clamped * 100).toInt().coerceIn(range[0].toInt(), range[1].toInt())
@@ -116,6 +159,8 @@ class EqualizerManager(audioSessionId: Int) {
     fun setBassBoost(strength: Int) {
         val clamped = strength.coerceIn(0, 100)
         bassBoostStrength = clamped
+        // Remember across manager recreations (audio session change).
+        lastBassStrength = clamped
         try {
             bassBoost?.setStrength((clamped * 10).toShort())
             bassBoost?.enabled = enabled && clamped > 0
@@ -161,14 +206,35 @@ class EqualizerManager(audioSessionId: Int) {
     }
 
     companion object {
+        /**
+         * Last levels / bass strength the user set, kept process-wide so
+         * a freshly built manager (new audio session after a player
+         * rebuild or decoder fallback) restores the same sound instead
+         * of silently going flat. Only the user's own choices are ever
+         * stored here — no audio data.
+         */
+        private var lastLevels: List<Float>? = null
+        private var lastBassStrength: Int = 0
+
         /** Preset name to five band levels in dB. */
         val PRESETS: Map<String, List<Float>> = mapOf(
-            "Normal" to listOf(0f, 0f, 0f, 0f, 0f),
-            "Bass Boost" to listOf(9f, 6f, 2f, 0f, -2f),
-            "Vocal" to listOf(-3f, 0f, 4f, 7f, 3f),
+            "Flat" to listOf(0f, 0f, 0f, 0f, 0f),
             "Rock" to listOf(7f, 4f, -2f, 3f, 6f),
             "Pop" to listOf(3f, 5f, 6f, 3f, 1f),
-            "Classical" to listOf(2f, 1f, 0f, 3f, 6f)
+            "Jazz" to listOf(4f, 3f, 0f, 3f, 5f),
+            "Classical" to listOf(2f, 1f, 0f, 3f, 6f),
+            "Bass Boost" to listOf(9f, 6f, 2f, 0f, -2f)
         )
+
+        /**
+         * Display name for a stored preset value. The view-model's
+         * initial preset is the legacy name "Normal", which is the
+         * same flat preset renamed to "Flat".
+         */
+        fun displayPresetName(stored: String): String = when (stored) {
+            "Normal" -> "Flat"
+            "Vocal" -> "Jazz"
+            else -> stored
+        }
     }
 }

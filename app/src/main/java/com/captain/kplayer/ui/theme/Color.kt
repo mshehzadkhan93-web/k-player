@@ -51,6 +51,9 @@ data class BackgroundColors(val top: Color, val bottom: Color, val mid: Color? =
  * [cardTint] is the theme's own tint washed into glass panels at very
  * low alpha, so cards follow the theme instead of looking identical
  * everywhere; null falls back to the accent glow color.
+ * [isLight] marks a light theme (light surfaces, dark text). Light
+ * themes re-theme the whole app: background gradient, card tints,
+ * glows, the Material 3 color scheme and the text tokens below.
  */
 data class ThemeDefinition(
     val id: String,
@@ -58,13 +61,72 @@ data class ThemeDefinition(
     val description: String,
     val background: BackgroundColors,
     val accent: AccentColors,
-    val cardTint: Color? = null
+    val cardTint: Color? = null,
+    val isLight: Boolean = false
 ) {
     /** Tint color washed into glass surfaces for this theme. */
     val cardTintColor: Color get() = cardTint ?: accent.glowColor
+
+    /** Primary text color for this theme: near-black on light themes, near-white on dark themes. */
+    val textPrimary: Color get() = if (isLight) Color(0xFF101828) else TextPrimary
+
+    /** Secondary text color for this theme. */
+    val textSecondary: Color get() = if (isLight) Color(0xFF475467) else TextSecondary
+
+    /** Muted text color for this theme. */
+    val textMuted: Color get() = if (isLight) Color(0xFF667085) else TextMuted
 }
 
 val THEMES: Map<String, ThemeDefinition> = mapOf(
+    "system" to ThemeDefinition(
+        id = "system",
+        displayName = "System default",
+        description = "Follows your device light / dark mode",
+        background = BackgroundColors(
+            top = Color(0xFF050505),
+            mid = Color(0xFF0E0E12),
+            bottom = Color(0xFF17171C)
+        ),
+        accent = AccentColors(
+            start = Color(0xFF22D3EE),
+            end = Color(0xFFF472B6),
+            glow = Color(0xFFA78BFA)
+        ),
+        cardTint = Color(0xFF22D3EE)
+    ),
+    "mx_dark" to ThemeDefinition(
+        id = "mx_dark",
+        displayName = "MX Dark",
+        description = "Near-black MX-style dark layout, K-Player cyan to pink accent",
+        background = BackgroundColors(
+            top = Color(0xFF050505),
+            mid = Color(0xFF0E0E12),
+            bottom = Color(0xFF17171C)
+        ),
+        accent = AccentColors(
+            start = Color(0xFF22D3EE),
+            end = Color(0xFFF472B6),
+            glow = Color(0xFFA78BFA)
+        ),
+        cardTint = Color(0xFF22D3EE)
+    ),
+    "light" to ThemeDefinition(
+        id = "light",
+        displayName = "Light",
+        description = "White and light-grey surfaces with dark text",
+        background = BackgroundColors(
+            top = Color(0xFFF7F8FA),
+            mid = Color(0xFFEDEFF3),
+            bottom = Color(0xFFE2E5EC)
+        ),
+        accent = AccentColors(
+            start = Color(0xFF0891B2),
+            end = Color(0xFFDB2777),
+            glow = Color(0xFF7C3AED)
+        ),
+        cardTint = Color(0xFF0891B2),
+        isLight = true
+    ),
     "nebula" to ThemeDefinition(
         id = "nebula",
         displayName = "Nebula",
@@ -199,6 +261,19 @@ fun themeDefinitionFor(name: String): ThemeDefinition {
     return THEMES[name] ?: THEMES.getValue("nebula")
 }
 
+/**
+ * Resolves a stored theme id to the definition the app actually uses.
+ * "system" follows the device: the MX Dark definition in dark mode,
+ * the Light definition in light mode. Any other id resolves to its own
+ * definition; unknown ids fall back to Nebula.
+ */
+fun resolveTheme(name: String, systemDark: Boolean): ThemeDefinition {
+    if (name == "system") {
+        return if (systemDark) THEMES.getValue("mx_dark") else THEMES.getValue("light")
+    }
+    return THEMES[name] ?: THEMES.getValue("nebula")
+}
+
 /** Current accent gradient, provided by KPlayerTheme. */
 val LocalAccent = compositionLocalOf { AccentColors(CyanAccent, PinkAccent) }
 
@@ -207,6 +282,15 @@ val LocalBackground = compositionLocalOf { BackgroundColors(MidnightBlue, Violet
 
 /** Current full theme definition, provided by KPlayerTheme. */
 val LocalTheme = compositionLocalOf { THEMES.getValue("nebula") }
+
+/** Current primary text color, provided by KPlayerTheme from the resolved theme. */
+val LocalTextPrimary = compositionLocalOf { TextPrimary }
+
+/** Current secondary text color, provided by KPlayerTheme from the resolved theme. */
+val LocalTextSecondary = compositionLocalOf { TextSecondary }
+
+/** Current muted text color, provided by KPlayerTheme from the resolved theme. */
+val LocalTextMuted = compositionLocalOf { TextMuted }
 
 /** Glass blur intensity 0..1, provided by KPlayerTheme from settings. Defaults low for clear glass. */
 val LocalGlassAlpha = compositionLocalOf { 0.12f }

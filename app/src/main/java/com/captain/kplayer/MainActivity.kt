@@ -1,6 +1,9 @@
 package com.captain.kplayer
 
+import android.app.PictureInPictureParams
+import android.os.Build
 import android.os.Bundle
+import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -53,6 +56,27 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         if (::playerViewModel.isInitialized) {
             playerViewModel.onAppBackgrounded()
+        }
+    }
+
+    /**
+     * Auto Picture-in-Picture when the user leaves the app (e.g. Home)
+     * while a video is playing and PiP is enabled — same 16:9 params as
+     * VideoPlayerScreen's enterPip(). Audio-only playback does not enter
+     * PiP (a black PiP window would be useless).
+     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (::playerViewModel.isInitialized &&
+            playerViewModel.pipEnabled.value &&
+            playerViewModel.currentEntry.value?.isVideo == true &&
+            playerViewModel.isPlaying.value &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+        ) {
+            val params = PictureInPictureParams.Builder()
+                .setAspectRatio(Rational(16, 9))
+                .build()
+            enterPictureInPictureMode(params)
         }
     }
 }

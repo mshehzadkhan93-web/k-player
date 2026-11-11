@@ -12,9 +12,11 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -29,22 +31,42 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 /**
- * Dark Material 3 scheme built from the selected theme, so primary,
+ * Material 3 scheme built from the selected theme, so primary,
  * secondary and tertiary always follow the theme's accent colors.
+ * Light themes get a proper light scheme (white surfaces, dark text);
+ * dark themes get a dark scheme (near-black surfaces, light text).
+ * The whole app re-themes through this scheme plus the K-Player
+ * design tokens (background gradient, card tints, glows, text).
  */
-private fun kPlayerColorScheme(theme: ThemeDefinition) = darkColorScheme(
-    primary = theme.accent.start,
-    secondary = theme.accent.end,
-    tertiary = theme.accent.glowColor,
-    background = theme.background.top,
-    surface = theme.background.top,
-    surfaceVariant = theme.background.midColor,
-    onPrimary = Color.Black,
-    onSecondary = Color.Black,
-    onBackground = TextPrimary,
-    onSurface = TextPrimary,
-    onSurfaceVariant = TextSecondary
-)
+private fun kPlayerColorScheme(theme: ThemeDefinition) = if (theme.isLight) {
+    lightColorScheme(
+        primary = theme.accent.start,
+        secondary = theme.accent.end,
+        tertiary = theme.accent.glowColor,
+        background = theme.background.top,
+        surface = Color.White,
+        surfaceVariant = theme.background.midColor,
+        onPrimary = Color.White,
+        onSecondary = Color.White,
+        onBackground = theme.textPrimary,
+        onSurface = theme.textPrimary,
+        onSurfaceVariant = theme.textSecondary
+    )
+} else {
+    darkColorScheme(
+        primary = theme.accent.start,
+        secondary = theme.accent.end,
+        tertiary = theme.accent.glowColor,
+        background = theme.background.top,
+        surface = theme.background.top,
+        surfaceVariant = theme.background.midColor,
+        onPrimary = Color.Black,
+        onSecondary = Color.Black,
+        onBackground = theme.textPrimary,
+        onSurface = theme.textPrimary,
+        onSurfaceVariant = theme.textSecondary
+    )
+}
 
 private val KPlayerTypography = Typography(
     displayLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold),
@@ -63,10 +85,12 @@ private val KPlayerTypography = Typography(
 )
 
 /**
- * App theme: dark Material 3 scheme plus the K-Player design tokens.
- * [themeName] picks one of the eight themes (Nebula, Emerald, Sunset,
- * Crimson, Ocean, Aurora, Golden Hour, Cyberpunk); the whole app
- * re-themes the moment it changes.
+ * App theme: Material 3 scheme plus the K-Player design tokens.
+ * [themeName] picks one of the themes (System default, MX Dark, Light,
+ * Nebula, Emerald, Sunset, Crimson, Ocean, Aurora, Golden Hour,
+ * Cyberpunk); "system" follows the device light / dark mode. The whole
+ * app re-themes the moment it changes: background gradient, card
+ * tints, glows, the Material scheme and the text colors.
  */
 @Composable
 fun KPlayerTheme(
@@ -74,7 +98,7 @@ fun KPlayerTheme(
     blurIntensity: Float = 0.12f,
     content: @Composable () -> Unit
 ) {
-    val theme = themeDefinitionFor(themeName)
+    val theme = resolveTheme(themeName, isSystemInDarkTheme())
     val accent = theme.accent
     val background = theme.background
     val scheme = kPlayerColorScheme(theme)
@@ -82,6 +106,9 @@ fun KPlayerTheme(
         LocalAccent provides accent,
         LocalBackground provides background,
         LocalTheme provides theme,
+        LocalTextPrimary provides theme.textPrimary,
+        LocalTextSecondary provides theme.textSecondary,
+        LocalTextMuted provides theme.textMuted,
         LocalGlassAlpha provides blurIntensity.coerceIn(0f, 1f)
     ) {
         MaterialTheme(
@@ -103,6 +130,9 @@ fun KPlayerTheme(
 fun GradientBackground(content: @Composable BoxScope.() -> Unit) {
     val background = LocalBackground.current
     val accent = LocalAccent.current
+    // On light themes the glow blobs stay subtle so the light
+    // background keeps its clean white / light-grey read.
+    val glowScale = if (LocalTheme.current.isLight) 0.45f else 1f
     val drift = rememberInfiniteTransition(label = "backgroundDrift")
     val driftX by drift.animateFloat(
         initialValue = -28f,
@@ -144,7 +174,7 @@ fun GradientBackground(content: @Composable BoxScope.() -> Unit) {
                 .offset(x = driftX.dp, y = driftY.dp)
                 .fillMaxSize(0.55f)
                 .blur(90.dp)
-                .background(accent.start.copy(alpha = breathe), CircleShape)
+                .background(accent.start.copy(alpha = breathe * glowScale), CircleShape)
         )
         Box(
             modifier = Modifier
@@ -152,7 +182,7 @@ fun GradientBackground(content: @Composable BoxScope.() -> Unit) {
                 .offset(x = -driftX.dp, y = -driftY.dp)
                 .fillMaxSize(0.5f)
                 .blur(90.dp)
-                .background(accent.end.copy(alpha = breathe * 0.8f), CircleShape)
+                .background(accent.end.copy(alpha = breathe * 0.8f * glowScale), CircleShape)
         )
         if (accent.hasGlow) {
             Box(
@@ -161,7 +191,7 @@ fun GradientBackground(content: @Composable BoxScope.() -> Unit) {
                     .offset(x = driftY.dp, y = driftX.dp)
                     .fillMaxSize(0.45f)
                     .blur(90.dp)
-                    .background(accent.glowColor.copy(alpha = breathe * 0.7f), CircleShape)
+                    .background(accent.glowColor.copy(alpha = breathe * 0.7f * glowScale), CircleShape)
             )
         }
         content()

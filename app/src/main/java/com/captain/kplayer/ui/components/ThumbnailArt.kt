@@ -43,10 +43,13 @@ private val PALETTES = listOf(
 )
 
 private object ArtCache {
-    private val cache = LinkedHashMap<String, Bitmap>(64, 0.75f, true)
+    // 32 entries max: a 512px ARGB_8888 bitmap is ~1 MB, so the old
+    // 64-entry cap could hold ~64 MB of placeholders. 32 (~32 MB)
+    // still covers every visible row plus scroll-ahead.
+    private val cache = LinkedHashMap<String, Bitmap>(32, 0.75f, true)
     fun get(key: String): Bitmap? = synchronized(this) { cache[key] }
     fun put(key: String, bitmap: Bitmap) = synchronized(this) {
-        if (cache.size > 64) {
+        if (cache.size > 32) {
             val oldest = cache.keys.firstOrNull()
             if (oldest != null) cache.remove(oldest)
         }
@@ -146,6 +149,11 @@ fun artBitmap(key: String, kind: ArtKind, size: Int = 512): Bitmap {
 /**
  * Thumbnail image drawn entirely in code (gradient + icon glyph) and loaded
  * through Coil, so no network images are ever required.
+ *
+ * [sizePx] is the bitmap edge in pixels: pass the size the image is
+ * actually displayed at instead of the 512px default, so a ~100dp list
+ * row does not hold a 1 MB bitmap. The bitmap is cached per
+ * (key, kind, size), so different sizes do not thrash each other.
  */
 @Composable
 fun ArtImage(
@@ -153,9 +161,10 @@ fun ArtImage(
     kind: ArtKind,
     modifier: Modifier = Modifier,
     contentDescription: String? = null,
-    isVideo: Boolean = false
+    isVideo: Boolean = false,
+    sizePx: Int = 512
 ) {
-    val bitmap = remember(key, kind) { artBitmap(key, kind) }
+    val bitmap = remember(key, kind, sizePx) { artBitmap(key, kind, sizePx) }
     val request = ImageRequest.Builder(LocalContext.current)
         .data(bitmap)
         .crossfade(true)
@@ -204,7 +213,10 @@ fun RealThumbnail(
             kind = ArtKind.VIDEO,
             modifier = modifier,
             contentDescription = contentDescription,
-            isVideo = true
+            isVideo = true,
+            // Fallback placeholder at the same size the frame was
+            // requested at, not the 512px default.
+            sizePx = maxOf(widthPx, heightPx)
         )
         return
     }

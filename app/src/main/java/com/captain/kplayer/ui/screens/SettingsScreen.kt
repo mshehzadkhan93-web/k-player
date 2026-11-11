@@ -3,7 +3,6 @@ package com.captain.kplayer.ui.screens
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,15 +10,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -28,15 +30,19 @@ import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -57,15 +63,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.navigation.NavHostController
 import com.captain.kplayer.BuildConfig
-import com.captain.kplayer.ui.components.GlassButton
-import com.captain.kplayer.ui.components.GlassCard
-import com.captain.kplayer.ui.components.SectionHeader
-import com.captain.kplayer.ui.components.SettingRow
 import com.captain.kplayer.ui.theme.GradientBackground
 import com.captain.kplayer.ui.theme.LocalAccent
+import com.captain.kplayer.ui.theme.LocalTextPrimary
+import com.captain.kplayer.ui.theme.LocalTextSecondary
 import com.captain.kplayer.ui.theme.THEMES
-import com.captain.kplayer.ui.theme.TextPrimary
-import com.captain.kplayer.ui.theme.TextSecondary
 import com.captain.kplayer.ui.theme.ThemeDefinition
 import com.captain.kplayer.viewmodel.LibraryViewModel
 import com.captain.kplayer.viewmodel.PlayerViewModel
@@ -75,9 +77,21 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Settings: every option is functional state backed by DataStore.
- * Groups: Playback, Decoder, Audio, Subtitles, Gestures, Appearance,
- * Interface, Storage & Privacy, Kids Lock and About.
+ * Settings, MX-style: a clean flat list with small uppercase section
+ * headers, thin dividers and dense rows — title, subtitle and a trailing
+ * control. Every section collapses by tapping its header (all start
+ * expanded, like MX Player which shows everything). Every option is
+ * functional state backed by DataStore, and every option is read by the
+ * player / library code that already consumes it.
+ *
+ * Groups: Player, Gestures, Subtitles, Audio, Appearance, Interface,
+ * Privacy, Kids Lock and About.
+ *
+ * NOTE: the Audio delay setting is persisted in DataStore but has no
+ * player consumer yet — PlayerViewModel has no audio-delay path, so a
+ * follow-up player package must apply `audioDelayMs` when opening a
+ * video. Every other option is read by the player / library code that
+ * already consumes it.
  */
 @Composable
 fun SettingsScreen(
@@ -87,6 +101,8 @@ fun SettingsScreen(
     libraryVm: LibraryViewModel
 ) {
     val context = LocalContext.current
+    val textPrimary = LocalTextPrimary.current
+    val textSecondary = LocalTextSecondary.current
 
     val decodingMode by settingsVm.decodingMode.collectAsState()
     val hardwareAcceleration by settingsVm.hardwareAcceleration.collectAsState()
@@ -101,7 +117,9 @@ fun SettingsScreen(
     val defaultSpeed by settingsVm.defaultSpeed.collectAsState()
     val audioBoost by settingsVm.audioBoost.collectAsState()
     val audioPassthrough by settingsVm.audioPassthrough.collectAsState()
+    val audioDelayMs by settingsVm.audioDelayMs.collectAsState()
     val audioLanguage by settingsVm.audioLanguage.collectAsState()
+    val equalizerEnabled by settingsVm.equalizerEnabled.collectAsState()
     val subtitleLanguage by settingsVm.subtitleLanguage.collectAsState()
     val subtitleEncoding by settingsVm.subtitleEncoding.collectAsState()
     val subtitleFont by settingsVm.subtitleFont.collectAsState()
@@ -140,10 +158,12 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp)
                 .padding(top = 48.dp, bottom = 32.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            ) {
                 IconButton(
                     onClick = { navController.popBackStack() },
                     modifier = Modifier.size(48.dp)
@@ -151,50 +171,38 @@ fun SettingsScreen(
                     Icon(
                         imageVector = Icons.Rounded.ArrowBack,
                         contentDescription = "Back",
-                        tint = TextPrimary
+                        tint = textPrimary
                     )
                 }
                 Text(
                     text = "Settings",
-                    color = TextPrimary,
+                    color = textPrimary,
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
 
-            // ------------------------------------------------ Playback
-            GroupCard("Playback") {
-                SelectorRow(
-                    title = "Resume mode",
-                    subtitle = "What to do when reopening a video",
-                    selectedId = resumeMode,
+            // ------------------------------------------------ Player
+            MxSection("Player") {
+                MxSelectorRow(
+                    title = "Decoder",
+                    subtitle = "HW+ uses hardware decoding with software fallback",
+                    selectedId = decodingMode,
                     options = listOf(
-                        "always_ask" to "Always ask",
-                        "always_resume" to "Always resume",
-                        "never" to "Never"
+                        "hw" to "HW", "hw_plus" to "HW+", "sw" to "SW"
                     ),
-                    onSelect = { settingsVm.setResumeMode(it) }
+                    onSelect = { settingsVm.setDecodingMode(it) }
                 )
-                SelectorRow(
-                    title = "Double-tap seek duration",
-                    subtitle = "How far a double-tap jumps",
-                    selectedId = doubleTapSeek.toString(),
-                    options = listOf("5" to "5 seconds", "10" to "10 seconds", "15" to "15 seconds", "30" to "30 seconds"),
-                    onSelect = { settingsVm.setDoubleTapSeek(it.toIntOrNull() ?: 10) }
+                MxToggleRow(
+                    title = "Hardware acceleration",
+                    subtitle = "Turn off to force software decoding",
+                    checked = hardwareAcceleration,
+                    onCheckedChange = { on ->
+                        settingsVm.setHardwareAcceleration(on)
+                        settingsVm.setDecodingMode(if (on) "hw_plus" else "sw")
+                    }
                 )
-                ToggleRow(
-                    title = "A-B repeat",
-                    subtitle = "Loop a section: tap A-B in the player to mark A, then B",
-                    checked = abRepeat,
-                    onCheckedChange = { settingsVm.setAbRepeat(it) }
-                )
-                ToggleRow(
-                    title = "Remember playback speed",
-                    subtitle = "Keep the last speed you chose for the next video",
-                    checked = rememberSpeed,
-                    onCheckedChange = { settingsVm.setRememberSpeed(it) }
-                )
-                SelectorRow(
+                MxSelectorRow(
                     title = "Default speed",
                     subtitle = "Speed new videos start at",
                     selectedId = defaultSpeed,
@@ -204,13 +212,43 @@ fun SettingsScreen(
                     ),
                     onSelect = { settingsVm.setDefaultSpeed(it) }
                 )
-                ToggleRow(
+                MxSelectorRow(
+                    title = "Resume",
+                    subtitle = "What to do when reopening a video",
+                    selectedId = resumeMode,
+                    options = listOf(
+                        "always_ask" to "Always ask",
+                        "always_resume" to "Always resume",
+                        "never" to "Never"
+                    ),
+                    onSelect = { settingsVm.setResumeMode(it) }
+                )
+                MxToggleRow(
+                    title = "Remember playback speed",
+                    subtitle = "Keep the last speed you chose for the next video",
+                    checked = rememberSpeed,
+                    onCheckedChange = { settingsVm.setRememberSpeed(it) }
+                )
+                MxSelectorRow(
+                    title = "Double-tap seek duration",
+                    subtitle = "How far a double-tap jumps",
+                    selectedId = doubleTapSeek.toString(),
+                    options = listOf("5" to "5 seconds", "10" to "10 seconds", "15" to "15 seconds", "30" to "30 seconds"),
+                    onSelect = { settingsVm.setDoubleTapSeek(it.toIntOrNull() ?: 10) }
+                )
+                MxToggleRow(
+                    title = "A-B repeat",
+                    subtitle = "Loop a section: tap A-B in the player to mark A, then B",
+                    checked = abRepeat,
+                    onCheckedChange = { settingsVm.setAbRepeat(it) }
+                )
+                MxToggleRow(
                     title = "Auto-rotate",
                     subtitle = "Rotate the player with the device sensor",
                     checked = autoRotate,
                     onCheckedChange = { settingsVm.setAutoRotate(it) }
                 )
-                SelectorRow(
+                MxSelectorRow(
                     title = "Screen orientation lock",
                     subtitle = "Force the player orientation",
                     selectedId = orientationLock,
@@ -219,13 +257,13 @@ fun SettingsScreen(
                     ),
                     onSelect = { settingsVm.setOrientationLock(it) }
                 )
-                ToggleRow(
+                MxToggleRow(
                     title = "Picture-in-Picture",
                     subtitle = "Show the PiP button in the player",
                     checked = pipEnabled,
                     onCheckedChange = { settingsVm.setPipEnabled(it) }
                 )
-                ToggleRow(
+                MxToggleRow(
                     title = "Background play",
                     subtitle = "Keep audio playing when you leave the player",
                     checked = backgroundPlay,
@@ -233,161 +271,27 @@ fun SettingsScreen(
                 )
             }
 
-            // ------------------------------------------------ Decoder
-            GroupCard("Decoder") {
-                SelectorRow(
-                    title = "Decoder mode",
-                    subtitle = "HW+ uses hardware decoding with software fallback",
-                    selectedId = decodingMode,
-                    options = listOf(
-                        "hw" to "HW", "hw_plus" to "HW+", "sw" to "SW"
-                    ),
-                    onSelect = { settingsVm.setDecodingMode(it) }
-                )
-                ToggleRow(
-                    title = "Hardware acceleration",
-                    subtitle = "Turn off to force software decoding",
-                    checked = hardwareAcceleration,
-                    onCheckedChange = { on ->
-                        settingsVm.setHardwareAcceleration(on)
-                        settingsVm.setDecodingMode(if (on) "hw_plus" else "sw")
-                    }
-                )
-            }
-
-            // ------------------------------------------------ Audio
-            GroupCard("Audio") {
-                SliderRow(
-                    title = "Audio boost",
-                    subtitle = "Raise volume beyond 100% (up to 200%)",
-                    value = audioBoost,
-                    valueRange = 1.0f..2.0f,
-                    steps = 19,
-                    valueText = "${(audioBoost * 100).toInt()}%",
-                    onValueChange = { playerVm.setAudioBoost(it) }
-                )
-                ToggleRow(
-                    title = "Audio passthrough",
-                    subtitle = "Send the raw bitstream (AC3 / E-AC3) straight to the receiver — equalizer and boost are bypassed",
-                    checked = audioPassthrough,
-                    onCheckedChange = { settingsVm.setAudioPassthrough(it) }
-                )
-                SelectorRow(
-                    title = "Preferred audio language",
-                    subtitle = "Picked automatically when a video has it",
-                    selectedId = audioLanguage,
-                    options = AUDIO_LANGUAGES.map { it to it },
-                    onSelect = { playerVm.setPreferredAudioLanguage(it) }
-                )
-            }
-
-            // ------------------------------------------------ Subtitles
-            GroupCard("Subtitles") {
-                SelectorRow(
-                    title = "Default subtitle language",
-                    subtitle = "Picked automatically when a video has it",
-                    selectedId = subtitleLanguage,
-                    options = SUBTITLE_LANGUAGES.map { it to it },
-                    onSelect = { playerVm.setPreferredSubtitleLanguage(it) }
-                )
-                SelectorRow(
-                    title = "Subtitle encoding",
-                    subtitle = "Charset used when reading subtitle files",
-                    selectedId = subtitleEncoding,
-                    options = listOf("UTF-8" to "UTF-8", "Auto" to "Auto"),
-                    onSelect = { settingsVm.setSubtitleEncoding(it) }
-                )
-                // Sync delay +/- 0.5s.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Sync delay",
-                        color = TextPrimary,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(
-                        onClick = { playerVm.adjustSubtitleDelay(-500L) },
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Remove,
-                            contentDescription = "Delay minus 0.5s",
-                            tint = TextPrimary
-                        )
-                    }
-                    Text(
-                        text = if (subtitleDelayMs >= 0) "+${subtitleDelayMs / 1000.0}s"
-                        else "${subtitleDelayMs / 1000.0}s",
-                        color = TextPrimary,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    IconButton(
-                        onClick = { playerVm.adjustSubtitleDelay(500L) },
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Add,
-                            contentDescription = "Delay plus 0.5s",
-                            tint = TextPrimary
-                        )
-                    }
-                }
-                SelectorRow(
-                    title = "Subtitle font",
-                    selectedId = subtitleFont,
-                    options = SUBTITLE_FONTS.map { it to it },
-                    onSelect = { settingsVm.setSubtitleFont(it) }
-                )
-                SliderRow(
-                    title = "Subtitle size",
-                    value = subtitleSize,
-                    valueRange = 0.75f..1.5f,
-                    steps = 2,
-                    valueText = sizeLabel(subtitleSize),
-                    onValueChange = { settingsVm.setSubtitleSize(it) }
-                )
-                SelectorRow(
-                    title = "Subtitle color",
-                    selectedId = subtitleColor,
-                    options = SUBTITLE_COLORS.map { it to it },
-                    onSelect = { settingsVm.setSubtitleColor(it) }
-                )
-                SelectorRow(
-                    title = "Subtitle background",
-                    selectedId = subtitleBackground,
-                    options = SUBTITLE_BACKGROUNDS.map { it to it },
-                    onSelect = { settingsVm.setSubtitleBackground(it) }
-                )
-            }
-
             // ------------------------------------------------ Gestures
-            GroupCard("Gestures") {
-                ToggleRow(
+            MxSection("Gestures") {
+                MxToggleRow(
                     title = "Brightness gesture",
                     subtitle = "Swipe up / down on the left side of the player",
                     checked = gestureBrightness,
                     onCheckedChange = { settingsVm.setGestureBrightness(it) }
                 )
-                ToggleRow(
+                MxToggleRow(
                     title = "Volume gesture",
                     subtitle = "Swipe up / down on the right side of the player",
                     checked = gestureVolume,
                     onCheckedChange = { settingsVm.setGestureVolume(it) }
                 )
-                ToggleRow(
+                MxToggleRow(
                     title = "Seek gesture",
                     subtitle = "Swipe left / right to seek",
                     checked = gestureSeek,
                     onCheckedChange = { settingsVm.setGestureSeek(it) }
                 )
-                SliderRow(
+                MxSliderRow(
                     title = "Gesture sensitivity",
                     subtitle = "How strongly the player reacts to swipes",
                     value = gestureSensitivity,
@@ -398,23 +302,117 @@ fun SettingsScreen(
                 )
             }
 
+            // ------------------------------------------------ Subtitles
+            MxSection("Subtitles") {
+                MxSelectorRow(
+                    title = "Default subtitle language",
+                    subtitle = "Picked automatically when a video has it",
+                    selectedId = subtitleLanguage,
+                    options = SUBTITLE_LANGUAGES.map { it to it },
+                    onSelect = { playerVm.setPreferredSubtitleLanguage(it) }
+                )
+                MxSelectorRow(
+                    title = "Subtitle encoding",
+                    subtitle = "Charset used when reading subtitle files",
+                    selectedId = subtitleEncoding,
+                    options = listOf("UTF-8" to "UTF-8", "Auto" to "Auto"),
+                    onSelect = { settingsVm.setSubtitleEncoding(it) }
+                )
+                MxStepperRow(
+                    title = "Sync delay",
+                    subtitle = "Shift subtitles earlier or later to match the audio",
+                    valueText = formatDelaySeconds(subtitleDelayMs),
+                    onMinus = { playerVm.adjustSubtitleDelay(-500L) },
+                    onPlus = { playerVm.adjustSubtitleDelay(500L) },
+                    minusDescription = "Delay minus 0.5s",
+                    plusDescription = "Delay plus 0.5s"
+                )
+                MxSelectorRow(
+                    title = "Subtitle font",
+                    selectedId = subtitleFont,
+                    options = SUBTITLE_FONTS.map { it to it },
+                    onSelect = { settingsVm.setSubtitleFont(it) }
+                )
+                MxSliderRow(
+                    title = "Subtitle size",
+                    value = subtitleSize,
+                    valueRange = 0.75f..1.5f,
+                    steps = 2,
+                    valueText = sizeLabel(subtitleSize),
+                    onValueChange = { settingsVm.setSubtitleSize(it) }
+                )
+                MxSelectorRow(
+                    title = "Subtitle color",
+                    selectedId = subtitleColor,
+                    options = SUBTITLE_COLORS.map { it to it },
+                    onSelect = { settingsVm.setSubtitleColor(it) }
+                )
+                MxSelectorRow(
+                    title = "Subtitle background",
+                    selectedId = subtitleBackground,
+                    options = SUBTITLE_BACKGROUNDS.map { it to it },
+                    onSelect = { settingsVm.setSubtitleBackground(it) }
+                )
+            }
+
+            // ------------------------------------------------ Audio
+            MxSection("Audio") {
+                MxToggleRow(
+                    title = "Equalizer",
+                    subtitle = "5-band equalizer with bass boost — open it from the player to adjust the bands",
+                    checked = equalizerEnabled,
+                    onCheckedChange = { settingsVm.setEqualizerEnabled(it) }
+                )
+                MxSliderRow(
+                    title = "Volume boost",
+                    subtitle = "Raise volume beyond 100% (up to 200%)",
+                    value = audioBoost,
+                    valueRange = 1.0f..2.0f,
+                    steps = 19,
+                    valueText = "${(audioBoost * 100).toInt()}%",
+                    onValueChange = { playerVm.setAudioBoost(it) }
+                )
+                MxStepperRow(
+                    title = "Audio delay",
+                    subtitle = "Shift the audio earlier or later to match the picture",
+                    valueText = formatDelaySeconds(audioDelayMs.toLong()),
+                    onMinus = { settingsVm.setAudioDelayMs((audioDelayMs - 100).coerceIn(-5000, 5000)) },
+                    onPlus = { settingsVm.setAudioDelayMs((audioDelayMs + 100).coerceIn(-5000, 5000)) },
+                    minusDescription = "Audio delay minus 0.1s",
+                    plusDescription = "Audio delay plus 0.1s"
+                )
+                MxToggleRow(
+                    title = "Audio passthrough",
+                    subtitle = "Send the raw bitstream (AC3 / E-AC3) straight to the receiver — equalizer and boost are bypassed",
+                    checked = audioPassthrough,
+                    onCheckedChange = { settingsVm.setAudioPassthrough(it) }
+                )
+                MxSelectorRow(
+                    title = "Preferred audio language",
+                    subtitle = "Picked automatically when a video has it",
+                    selectedId = audioLanguage,
+                    options = AUDIO_LANGUAGES.map { it to it },
+                    onSelect = { playerVm.setPreferredAudioLanguage(it) }
+                )
+            }
+
             // ------------------------------------------------ Appearance
-            GroupCard("Appearance") {
+            MxSection("Appearance") {
                 Text(
                     text = "Theme",
-                    color = TextPrimary,
+                    color = textPrimary,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp)
+                    modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp)
                 )
                 THEMES.values.forEach { theme ->
-                    ThemeRow(
+                    MxThemeRow(
                         theme = theme,
                         selected = themeName == theme.id,
                         onClick = { settingsVm.setThemeName(theme.id) }
                     )
                 }
-                SliderRow(
+                MxSliderRow(
                     title = "Glass blur intensity",
                     subtitle = "How frosted the glass panels look",
                     value = blurIntensity,
@@ -426,15 +424,15 @@ fun SettingsScreen(
             }
 
             // ------------------------------------------------ Interface
-            GroupCard("Interface") {
-                SelectorRow(
+            MxSection("Interface") {
+                MxSelectorRow(
                     title = "Default view",
                     subtitle = "How the video library is shown",
                     selectedId = defaultView,
                     options = listOf("grid" to "Grid", "list" to "List"),
                     onSelect = { settingsVm.setDefaultView(it) }
                 )
-                SelectorRow(
+                MxSelectorRow(
                     title = "Default sort order",
                     subtitle = "How the video library is sorted",
                     selectedId = defaultSort,
@@ -444,7 +442,7 @@ fun SettingsScreen(
                     ),
                     onSelect = { settingsVm.setDefaultSort(it) }
                 )
-                ToggleRow(
+                MxToggleRow(
                     title = "Show hidden files",
                     subtitle = "Include dot-files and dot-folders from device storage",
                     checked = showHiddenFiles,
@@ -452,30 +450,30 @@ fun SettingsScreen(
                 )
             }
 
-            // ------------------------------------------------ Storage & Privacy
-            GroupCard("Storage & Privacy") {
-                ActionRow(
+            // ------------------------------------------------ Privacy
+            MxSection("Privacy") {
+                MxActionRow(
                     title = "Clear cache",
                     subtitle = "Delete temporary files (downloaded subtitles, thumbnails)",
                     onClick = { confirmClear = "cache" }
                 )
-                ActionRow(
+                MxActionRow(
                     title = "Clear watch history",
                     subtitle = "Remove all saved resume positions",
                     onClick = { confirmClear = "history" }
                 )
-                ActionRow(
+                MxActionRow(
                     title = "Clear recent streams",
                     subtitle = "Remove the recent streams list",
                     onClick = { confirmClear = "streams" }
                 )
-                SettingRow(
+                MxRow(
                     title = "Storage usage",
                     subtitle = "App files on this device",
                     trailing = {
                         Text(
                             text = storageText,
-                            color = TextSecondary,
+                            color = textSecondary,
                             fontSize = 14.sp
                         )
                     }
@@ -483,8 +481,8 @@ fun SettingsScreen(
             }
 
             // ------------------------------------------------ Kids Lock
-            GroupCard("Kids Lock") {
-                ToggleRow(
+            MxSection("Kids Lock") {
+                MxToggleRow(
                     title = "Kids Lock",
                     subtitle = "Locks the player UI so kids cannot change videos or leave the player — long-press the lock icon to unlock",
                     checked = kidsLock,
@@ -493,13 +491,13 @@ fun SettingsScreen(
             }
 
             // ------------------------------------------------ About
-            GroupCard("About") {
-                SettingRow(
+            MxSection("About") {
+                MxRow(
                     title = "Version",
                     subtitle = "K-Player ${BuildConfig.VERSION_NAME}",
                     trailing = {}
                 )
-                ActionRow(
+                MxActionRow(
                     title = "Check for updates",
                     subtitle = "See if a newer version is available",
                     onClick = {
@@ -510,7 +508,7 @@ fun SettingsScreen(
                         ).show()
                     }
                 )
-                ActionRow(
+                MxActionRow(
                     title = "Rate K-Player",
                     subtitle = "Tell us what you think",
                     onClick = {
@@ -521,7 +519,7 @@ fun SettingsScreen(
                         ).show()
                     }
                 )
-                ActionRow(
+                MxActionRow(
                     title = "Share K-Player",
                     subtitle = "Send the app to a friend",
                     onClick = {
@@ -537,24 +535,31 @@ fun SettingsScreen(
                         )
                     }
                 )
-                ActionRow(
+                MxActionRow(
                     title = "Privacy Policy",
                     subtitle = "How K-Player handles your data",
                     onClick = { showPrivacy = true }
                 )
-                // About cards — inside the About group so they collapse with it.
-                SectionHeader("About K-Player")
-                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                // About cards, inside the About section so they collapse with it.
+                MxSectionLabel("About K-Player")
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 1.dp
+                ) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text(
-                            text = "K-Player",
-                            color = TextPrimary,
+                            text = "K-Player / by Shehzad",
+                            color = textPrimary,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
                             text = "Version ${BuildConfig.VERSION_NAME}",
-                            color = TextSecondary,
+                            color = textSecondary,
                             fontSize = 13.sp,
                             modifier = Modifier.padding(top = 2.dp)
                         )
@@ -562,7 +567,7 @@ fun SettingsScreen(
                             text = "A premium modern media player for videos and music, " +
                                 "with a glass design, hardware decoding, subtitles, " +
                                 "equalizer and network streaming.",
-                            color = TextPrimary,
+                            color = textPrimary,
                             fontSize = 14.sp,
                             modifier = Modifier.padding(top = 10.dp)
                         )
@@ -573,32 +578,39 @@ fun SettingsScreen(
                                 "• 5-band equalizer with bass boost\n" +
                                 "• Network streams (HTTP, HLS, DASH)\n" +
                                 "• Resume playback, playlists and sleep timer",
-                            color = TextSecondary,
+                            color = textSecondary,
                             fontSize = 14.sp,
                             lineHeight = 22.sp,
                             modifier = Modifier.padding(top = 10.dp)
                         )
                     }
                 }
-                SectionHeader("About the Developer")
-                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                MxSectionLabel("About the Developer")
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 1.dp
+                ) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text(
                             text = "Developed by Shehzad Khan",
-                            color = TextPrimary,
+                            color = textPrimary,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
                             text = "Independent Android developer crafting premium, " +
                                 "beautiful apps.",
-                            color = TextPrimary,
+                            color = textPrimary,
                             fontSize = 14.sp,
                             modifier = Modifier.padding(top = 8.dp)
                         )
                         Text(
                             text = "Contact: —",
-                            color = TextSecondary,
+                            color = textSecondary,
                             fontSize = 13.sp,
                             modifier = Modifier.padding(top = 8.dp)
                         )
@@ -610,7 +622,7 @@ fun SettingsScreen(
         }
     }
 
-    // Confirmation dialogs for the Storage & Privacy actions.
+    // Confirmation dialogs for the Privacy actions.
     confirmClear?.let { kind ->
         val (title, message) = when (kind) {
             "cache" -> "Clear cache?" to
@@ -620,22 +632,26 @@ fun SettingsScreen(
             else -> "Clear recent streams?" to
                 "The recent streams list will be emptied."
         }
-        OpaqueDialog(onDismiss = { confirmClear = null }) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text(
-                    text = title,
-                    color = TextPrimary,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = message,
-                    color = TextSecondary,
-                    fontSize = 14.sp,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-                Spacer(modifier = Modifier.height(20.dp))
-                GlassButton(
+        MxDialog(onDismiss = { confirmClear = null }) {
+            Text(
+                text = title,
+                color = LocalTextPrimary.current,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = message,
+                color = LocalTextSecondary.current,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = { confirmClear = null }) {
+                    Text("Cancel")
+                }
+                TextButton(
                     onClick = {
                         when (kind) {
                             "cache" -> {
@@ -666,127 +682,169 @@ fun SettingsScreen(
                             }
                         }
                         confirmClear = null
-                    },
-                    text = "Clear",
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                GlassButton(
-                    onClick = { confirmClear = null },
-                    text = "Cancel",
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    }
+                ) {
+                    Text("Clear")
+                }
             }
         }
     }
 
     // Privacy policy dialog.
     if (showPrivacy) {
-        OpaqueDialog(onDismiss = { showPrivacy = false }) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text(
-                    text = "Privacy Policy",
-                    color = TextPrimary,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "K-Player plays media stored on your device and streams " +
-                        "you choose to open. Your files are never uploaded anywhere. " +
-                        "Settings, resume positions and recent streams are stored " +
-                        "only on this device and are removed when you clear them " +
-                        "in Storage & Privacy or uninstall the app.",
-                    color = TextPrimary,
-                    fontSize = 14.sp,
-                    lineHeight = 22.sp,
-                    modifier = Modifier.padding(top = 10.dp)
-                )
-                Spacer(modifier = Modifier.height(20.dp))
-                GlassButton(
-                    onClick = { showPrivacy = false },
-                    text = "Close",
-                    modifier = Modifier.fillMaxWidth()
-                )
+        MxDialog(onDismiss = { showPrivacy = false }) {
+            Text(
+                text = "Privacy Policy",
+                color = LocalTextPrimary.current,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "K-Player plays media stored on your device and streams " +
+                    "you choose to open. Your files are never uploaded anywhere. " +
+                    "Settings, resume positions and recent streams are stored " +
+                    "only on this device and are removed when you clear them " +
+                    "in Privacy or uninstall the app.",
+                color = LocalTextPrimary.current,
+                fontSize = 14.sp,
+                lineHeight = 22.sp,
+                modifier = Modifier.padding(top = 10.dp)
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = { showPrivacy = false }) {
+                    Text("Close")
+                }
             }
         }
     }
 }
 
-/**
- * Dialog with a fully opaque solid surface background (alpha 1.0).
- * GlassDialog's frosted glass lets content bleed through from behind,
- * so settings dialogs use this instead.
- */
+/** Dialog with a solid theme surface (adapts to light / dark). */
 @Composable
-private fun OpaqueDialog(
+private fun MxDialog(
     onDismiss: () -> Unit,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
-        GlassCard(
+        Surface(
             modifier = Modifier.fillMaxWidth(),
-            opaque = true,
-            content = content
-        )
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 2.dp
+        ) {
+            Column(modifier = Modifier.padding(20.dp), content = content)
+        }
     }
 }
 
 /**
- * One collapsible settings group. Every group starts collapsed and each
- * group remembers its own expanded state (keyed by section title) across
- * recompositions and configuration changes, so groups expand and collapse
- * independently. The header shows the title and a chevron that rotates
- * when the group opens.
+ * One collapsible settings section, MX-style: a small uppercase header
+ * with a chevron, a thin divider, then the rows. Every section starts
+ * expanded and remembers its own state (keyed by title) across
+ * recompositions and configuration changes.
  */
 @Composable
-private fun GroupCard(
+private fun MxSection(
     title: String,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    var expanded by rememberSaveable(title) { mutableStateOf(false) }
-    GlassCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .animateContentSize()
-    ) {
+    var expanded by rememberSaveable(title) { mutableStateOf(true) }
+    val textSecondary = LocalTextSecondary.current
+    Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable { expanded = !expanded }
-                .padding(horizontal = 20.dp, vertical = 14.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = title,
-                color = TextPrimary,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.SemiBold,
+                text = title.uppercase(),
+                color = LocalAccent.current.start,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.2.sp,
                 modifier = Modifier.weight(1f)
             )
             Icon(
                 imageVector = Icons.Rounded.ChevronRight,
                 contentDescription = if (expanded) "Collapse $title" else "Expand $title",
-                tint = TextSecondary,
+                tint = textSecondary,
                 modifier = Modifier
-                    .size(24.dp)
+                    .size(20.dp)
                     .rotate(if (expanded) 90f else 0f)
             )
         }
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+            thickness = 0.5.dp,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
         if (expanded) {
             content()
+            Spacer(modifier = Modifier.height(8.dp))
         }
     }
-    Spacer(modifier = Modifier.height(12.dp))
+}
+
+/** Small uppercase label used above the About cards. */
+@Composable
+private fun MxSectionLabel(text: String) {
+    Text(
+        text = text.uppercase(),
+        color = LocalTextSecondary.current,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 1.2.sp,
+        modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 8.dp)
+    )
+}
+
+/** Base MX-style row: title, optional subtitle, trailing control. */
+@Composable
+private fun MxRow(
+    title: String,
+    subtitle: String? = null,
+    modifier: Modifier = Modifier,
+    trailing: @Composable RowScope.() -> Unit = {}
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = LocalTextPrimary.current,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    color = LocalTextSecondary.current,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, content = trailing)
+    }
 }
 
 @Composable
-private fun ToggleRow(
+private fun MxToggleRow(
     title: String,
     subtitle: String? = null,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
-    SettingRow(
+    MxRow(
         title = title,
         subtitle = subtitle,
         trailing = {
@@ -795,7 +853,9 @@ private fun ToggleRow(
                 onCheckedChange = onCheckedChange,
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
-                    checkedTrackColor = LocalAccent.current.start
+                    checkedTrackColor = LocalAccent.current.start,
+                    uncheckedThumbColor = Color(0xFFFAFAFA),
+                    uncheckedTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.30f)
                 )
             )
         }
@@ -803,7 +863,7 @@ private fun ToggleRow(
 }
 
 @Composable
-private fun SelectorRow(
+private fun MxSelectorRow(
     title: String,
     subtitle: String? = null,
     selectedId: String,
@@ -813,17 +873,21 @@ private fun SelectorRow(
     var expanded by remember { mutableStateOf(false) }
     val selectedLabel = options.firstOrNull { it.first == selectedId }?.second ?: selectedId
     Box {
-        SettingRow(
+        MxRow(
             title = title,
             subtitle = subtitle,
             modifier = Modifier.clickable { expanded = true },
             trailing = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = selectedLabel, color = TextSecondary, fontSize = 14.sp)
+                    Text(
+                        text = selectedLabel,
+                        color = LocalTextSecondary.current,
+                        fontSize = 14.sp
+                    )
                     Icon(
                         imageVector = Icons.Rounded.ChevronRight,
                         contentDescription = null,
-                        tint = TextSecondary,
+                        tint = LocalTextSecondary.current,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -844,7 +908,7 @@ private fun SelectorRow(
 }
 
 @Composable
-private fun SliderRow(
+private fun MxSliderRow(
     title: String,
     subtitle: String? = null,
     value: Float,
@@ -856,19 +920,19 @@ private fun SliderRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 10.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = title,
-                color = TextPrimary,
+                color = LocalTextPrimary.current,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.weight(1f)
             )
             Text(
                 text = valueText,
-                color = TextSecondary,
+                color = LocalTextSecondary.current,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -876,7 +940,7 @@ private fun SliderRow(
         if (subtitle != null) {
             Text(
                 text = subtitle,
-                color = TextSecondary,
+                color = LocalTextSecondary.current,
                 fontSize = 13.sp,
                 modifier = Modifier.padding(top = 2.dp)
             )
@@ -887,22 +951,61 @@ private fun SliderRow(
             valueRange = valueRange,
             steps = steps,
             colors = SliderDefaults.colors(
-                thumbColor = Color.White,
+                thumbColor = LocalAccent.current.start,
                 activeTrackColor = LocalAccent.current.start,
-                inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+                inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.20f)
             ),
             modifier = Modifier.fillMaxWidth()
         )
     }
 }
 
+/** Minus / value / plus stepper row (subtitle sync delay, audio delay). */
 @Composable
-private fun ActionRow(
+private fun MxStepperRow(
+    title: String,
+    subtitle: String? = null,
+    valueText: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit,
+    minusDescription: String,
+    plusDescription: String
+) {
+    MxRow(
+        title = title,
+        subtitle = subtitle,
+        trailing = {
+            IconButton(onClick = onMinus, modifier = Modifier.size(48.dp)) {
+                Icon(
+                    imageVector = Icons.Rounded.Remove,
+                    contentDescription = minusDescription,
+                    tint = LocalTextPrimary.current
+                )
+            }
+            Text(
+                text = valueText,
+                color = LocalTextPrimary.current,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            IconButton(onClick = onPlus, modifier = Modifier.size(48.dp)) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = plusDescription,
+                    tint = LocalTextPrimary.current
+                )
+            }
+        }
+    )
+}
+
+@Composable
+private fun MxActionRow(
     title: String,
     subtitle: String? = null,
     onClick: () -> Unit
 ) {
-    SettingRow(
+    MxRow(
         title = title,
         subtitle = subtitle,
         modifier = Modifier.clickable(onClick = onClick),
@@ -910,7 +1013,7 @@ private fun ActionRow(
             Icon(
                 imageVector = Icons.Rounded.ChevronRight,
                 contentDescription = null,
-                tint = TextSecondary,
+                tint = LocalTextSecondary.current,
                 modifier = Modifier.size(20.dp)
             )
         }
@@ -918,7 +1021,7 @@ private fun ActionRow(
 }
 
 @Composable
-private fun ThemeRow(
+private fun MxThemeRow(
     theme: ThemeDefinition,
     selected: Boolean,
     onClick: () -> Unit
@@ -927,31 +1030,33 @@ private fun ThemeRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // "System default" gets a half-light / half-dark swatch; every
+        // other theme shows its own accent gradient.
+        val swatch = if (theme.id == "system") {
+            Brush.horizontalGradient(listOf(Color(0xFFF5F5F5), Color(0xFF111111)))
+        } else {
+            Brush.horizontalGradient(listOf(theme.accent.start, theme.accent.end))
+        }
         Box(
             modifier = Modifier
                 .size(40.dp)
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(theme.accent.start, theme.accent.end)
-                    ),
-                    CircleShape
-                )
+                .background(swatch, CircleShape)
                 .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape)
         )
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = theme.displayName,
-                color = TextPrimary,
+                color = LocalTextPrimary.current,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium
             )
             Text(
                 text = theme.description,
-                color = TextSecondary,
+                color = LocalTextSecondary.current,
                 fontSize = 13.sp
             )
         }
@@ -980,4 +1085,10 @@ private fun formatBytes(bytes: Long): String {
         bytes >= 1_024L -> "%.0f KB".format(bytes / 1_024.0)
         else -> "$bytes B"
     }
+}
+
+/** Formats a millisecond delay as signed seconds, e.g. "+0.5s", "-1.2s", "0.0s". */
+private fun formatDelaySeconds(delayMs: Long): String {
+    val seconds = delayMs / 1000.0
+    return if (delayMs >= 0) "+%.1fs".format(seconds) else "%.1fs".format(seconds)
 }

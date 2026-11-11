@@ -1,7 +1,12 @@
 package com.captain.kplayer.data
 
+import android.app.RecoverableSecurityException
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
+import android.content.IntentSender
+import android.net.Uri
 import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -175,6 +180,128 @@ object MediaStoreRepository {
         return counts.map { (name, count) ->
             FolderItem(name, paths[name] ?: "/storage/$name", count, "folder_$name")
         }.sortedByDescending { it.count }
+    }
+
+    // ------------------------------------------------------------------
+    // v2.0 library actions: delete / rename / share
+    // ------------------------------------------------------------------
+
+    /** Result of [deleteVideo]. */
+    sealed interface DeleteResult {
+        /** The row (and the underlying file, for MediaStore rows) is gone. */
+        data object Deleted : DeleteResult
+
+        /**
+         * Android 10+ refused the delete without explicit user consent.
+         * Launch [intentSender] with StartIntentSenderForResult and retry
+         * the delete when the result is RESULT_OK.
+         */
+        data class NeedsUserConfirmation(val intentSender: IntentSender) : DeleteResult
+
+        /** The delete failed for another reason (message is user-facing). */
+        data class Failed(val message: String) : DeleteResult
+    }
+
+    /**
+     * Deletes a video. For on-device files (content:// MediaStore URIs)
+     * the MediaStore row is removed, which also removes the underlying
+     * file. For anything else (sample/stream URLs) there is nothing on
+     * disk to delete, so [DeleteResult.Deleted] is returned and the caller
+     * just drops the item from the in-memory library.
+     */
+    suspend fun deleteVideo(context: Context, video: VideoItem): DeleteResult =
+        withContext(Dispatchers.IO) {
+            val uri = runCatching { Uri.parse(video.url) }.getOrNull()
+                ?: return@withContext DeleteResult.Failed("That video has no valid file to delete.")
+            if (uri.scheme != "content") return@withContext DeleteResult.Deleted
+            try {
+                val rows = context.contentResolver.delete(uri, null, null)
+                if (rows > 0) DeleteResult.Deleted
+                else DeleteResult.Failed("Couldn't delete that video — it may already be gone.")
+            } catch (e: RecoverableSecurityException) {
+                val sender = e.userAction?.actionIntent?.intentSender
+                if (sender != null) DeleteResult.NeedsUserConfirmation(sender)
+                else DeleteResult.Failed("Android needs your permission to delete this file.")
+            } catch (_: SecurityException) {
+                DeleteResult.Failed("K-Player doesn't have permission to delete this file.")
+            } catch (_: Exception) {
+                DeleteResult.Failed("Couldn't delete that video. Try again.")
+            }
+        }
+
+    /**
+     * Renames a video in MediaStore (TITLE + DISPLAY_NAME, keeping the
+     * original file extension). Returns false when the rename failed or
+     * the video is not an on-device file — the caller then renames only
+     * the in-memory copy. [newName] is the display name without extension.
+     */
+    suspend fun renameVideo(context: Context, video: VideoItem, newName: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val uri = runCatching { Uri.parse(video.url) }.getOrNull()
+                ?: return@withContext false
+            if (uri.scheme != "content") return@withContext false
+            val trimmed = newName.trim()
+            if (trimmed.isEmpty()) return@withContext false
+            try {
+                // Keep the original extension so the file stays playable.
+                val currentName = queryDisplayName(context, uri)
+                val extension = currentName
+                    ?.takeIf { it.contains(".") }
+                    ?.substringAfterLast(".", "")
+                    ?.takeIf { it.length in 2..5 }
+                    ?: video.title.substringAfterLast(".", "")
+                        .takeIf { it.length in 2..5 && video.title.contains(".") }
+                val displayName =
+                    if (extension != null && !trimmed.endsWith(".$extension", ignoreCase = true)) {
+                        "$trimmed.$extension"
+                    } else trimmed
+                val values = ContentValues().apply {
+                    put(MediaStore.Video.Media.TITLE, trimmed)
+                    put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
+                }
+                context.contentResolver.update(uri, values, null, null) > 0
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+    private fun queryDisplayName(context: Context, uri: Uri): String? {
+        return try {
+            context.contentResolver.query(
+                uri, arrayOf(MediaStore.Video.Media.DISPLAY_NAME), null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getString(
+                        cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+                    )
+                } else null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Builds a share intent for a video: a content:// file is shared as a
+     * stream (with read permission granted to the receiver), anything else
+     * is shared as a link. The caller wraps it in
+     * Intent.createChooser(...) before starting it.
+     */
+    fun shareIntent(video: VideoItem): Intent {
+        val uri = runCatching { Uri.parse(video.url) }.getOrNull()
+        return if (uri != null && uri.scheme == "content") {
+            Intent(Intent.ACTION_SEND).apply {
+                type = "video/*"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        } else {
+            Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, video.url)
+                putExtra(Intent.EXTRA_SUBJECT, video.title)
+            }
+        }
     }
 
     private fun resolutionLabel(width: Int, height: Int): String {
